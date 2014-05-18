@@ -974,11 +974,11 @@ void SelectionDAGLegalize::LegalizeOp(SDNode *Node) {
            "Unexpected illegal type!");
 
   for (const SDValue &Op : Node->op_values())
-    assert((TLI.getTypeAction(*DAG.getContext(), Op.getValueType()) ==
+    assert(((TLI.getTypeAction(*DAG.getContext(), Op.getValueType()) ==
               TargetLowering::TypeLegal ||
             Op.getOpcode() == ISD::TargetConstant ||
             Op.getOpcode() == ISD::Register) &&
-            "Unexpected illegal type!");
+            "Unexpected illegal type!") || (Op.dump(),0));
 #endif
 
   // Figure out the correct action; the way to query this varies by opcode
