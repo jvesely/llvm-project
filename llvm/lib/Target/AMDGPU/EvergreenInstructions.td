@@ -324,7 +324,15 @@ let SubtargetPredicate = isEGorCayman in {
 
 multiclass AtomicPat<Instruction inst_ret, Instruction inst_noret,
                      SDPatternOperator node_ret, SDPatternOperator node_noret> {
-  // FIXME: Add _RTN version. We need per WI scratch location to store the old value
+  // FIXME: This does not work. We need per WI scratch space to store the
+  // old value
+  // EXTRACT_SUBREG here is dummy, we know the node has no uses
+  def : EGOrCaymanPat<(i32 (node_ret i32:$ptr, i32:$data)), (VTX_READ_32_eg
+            (EXTRACT_SUBREG (inst_ret
+              (INSERT_SUBREG
+                (INSERT_SUBREG (v4i32 (IMPLICIT_DEF)), (GLOBAL_HW_ID), sub1),
+              $data, sub0), $ptr), sub1),
+            (i32 0), (i8 1))>;
   // EXTRACT_SUBREG here is dummy, we know the node has no uses
   def : EGOrCaymanPat<(i32 (node_noret i32:$ptr, i32:$data)),
             (EXTRACT_SUBREG (inst_noret
@@ -332,7 +340,14 @@ multiclass AtomicPat<Instruction inst_ret, Instruction inst_noret,
 }
 multiclass AtomicIncDecPat<Instruction inst_ret, Instruction inst_noret,
                      SDPatternOperator node_ret, SDPatternOperator node_noret, int C> {
-  // FIXME: Add _RTN version. We need per WI scratch location to store the old value
+  // FIXME: This does not work. We need per WI scratch space to store the
+  // old value
+  def : EGOrCaymanPat<(i32 (node_ret i32:$ptr, C)), (VTX_READ_32_eg
+            (EXTRACT_SUBREG (inst_ret
+              (INSERT_SUBREG
+                (INSERT_SUBREG (v4i32 (IMPLICIT_DEF)), (GLOBAL_HW_ID), sub1),
+              (MOV_IMM_I32 -1), sub0), $ptr), sub1),
+            (i32 0), (i8 1))>;
   // EXTRACT_SUBREG here is dummy, we know the node has no uses
   def : EGOrCaymanPat<(i32 (node_noret i32:$ptr, C)),
             (EXTRACT_SUBREG (inst_noret
@@ -340,8 +355,18 @@ multiclass AtomicIncDecPat<Instruction inst_ret, Instruction inst_noret,
 }
 
 // CMPSWAP is pattern is special
+// FIXME: This does not work. We need per WI scratch space to store the
+// old value
+def : EGOrCaymanPat<(i32 (atomic_cmp_swap_global_ret i32:$ptr, i32:$cmp, i32:$data)),
+            (VTX_READ_32_eg
+              (EXTRACT_SUBREG (RAT_ATOMIC_CMPXCHG_INT_RTN
+                (INSERT_SUBREG
+                  (INSERT_SUBREG
+                    (INSERT_SUBREG (v4i32 (IMPLICIT_DEF)), $cmp, sub3),
+                  (GLOBAL_HW_ID), sub1),
+                $data, sub0), $ptr),
+               sub1), (i32 0), (i8 1))>;
 // EXTRACT_SUBREG here is dummy, we know the node has no uses
-// FIXME: Add _RTN version. We need per WI scratch location to store the old value
 def : EGOrCaymanPat<(i32 (atomic_cmp_swap_global_noret i32:$ptr, i32:$cmp, i32:$data)),
           (EXTRACT_SUBREG (RAT_ATOMIC_CMPXCHG_INT_NORET
             (INSERT_SUBREG
