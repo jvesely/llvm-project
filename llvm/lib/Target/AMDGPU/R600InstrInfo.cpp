@@ -999,9 +999,9 @@ unsigned R600InstrInfo::calculateIndirectAddress(unsigned RegIndex,
 }
 
 bool R600InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
+  MachineBasicBlock *MBB = MI.getParent();
   switch (MI.getOpcode()) {
   default: {
-    MachineBasicBlock *MBB = MI.getParent();
     int OffsetOpIdx =
         R600::getNamedOperandIdx(MI.getOpcode(), R600::OpName::addr);
     // addr is a custom operand with multiple MI operands, and only the
@@ -1059,6 +1059,15 @@ bool R600InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
                        MI.getOperand(3).getReg(),                     // Offset
                        RI.getHWRegChan(MI.getOperand(1).getReg()));   // Channel
     break;
+  case R600::GLOBAL_HW_ID: {
+    MachineFunction &MF = *MBB->getParent();
+    unsigned DstReg = MI.getOperand(0).getReg();
+    MachineInstr *WaveID = buildDefaultInstruction(*MBB, MI, R600::LSHL_eg, DstReg,
+                                                   R600::HW_WAVE_ID,
+                                                   R600::ALU_LITERAL_X);
+    setImmOperand(*WaveID, R600::OpName::literal, 6);
+    break;
+  }
   }
   MI.eraseFromParent();
   return true;

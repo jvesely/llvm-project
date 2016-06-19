@@ -127,6 +127,12 @@ def OQAP : R600Reg<"OQAP", 221>;
 def OQBP : R600Reg<"OQAP", 222>;
 def LDS_DIRECT_A : R600Reg<"LDS_DIRECT_A", 223>;
 def LDS_DIRECT_B : R600Reg<"LDS_DIRECT_B", 224>;
+
+// Is there a ways to restrict these to EG+?
+def HW_WAVE_ID : R600Reg<"HW_WAVE_ID", 231>;
+def SIMD_ID : R600Reg<"SIMD_ID", 232>;
+def SE_ID : R600Reg<"SE_ID", 233>;
+
 def ZERO : R600Reg<"0.0", 248>;
 def ONE : R600Reg<"1.0", 249>;
 def NEG_ONE : R600Reg<"-1.0", 249>;
