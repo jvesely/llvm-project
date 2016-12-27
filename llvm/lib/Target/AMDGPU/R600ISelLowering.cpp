@@ -1113,6 +1113,30 @@ void R600TargetLowering::getStackAddress(unsigned StackWidth,
   }
 }
 
+static MachinePointerInfo getPrivateMemPointerInfo(LSBaseSDNode *LSNode,
+                                                   SelectionDAG &DAG)
+{
+  assert(LSNode->getAddressSpace() == AMDGPUAS::PRIVATE_ADDRESS);
+  MachinePointerInfo OldInfo = LSNode->getPointerInfo();
+  SDValue Ptr = LSNode->getBasePtr();
+
+  // Frame index is 4 byte aligned
+  if (Ptr.getOpcode() == ISD::FrameIndex && LSNode->getOffset().isUndef())
+     return OldInfo;
+  if ((Ptr.getOpcode() == ISD::ADD || Ptr.getOpcode() == ISD::OR) &&
+      Ptr.getOperand(0).getOpcode() == ISD::FrameIndex &&
+      isa<ConstantSDNode>(Ptr.getOperand(1))) {
+    // It makes no sense if there is both LSNode offset and pointer ADD/OR.
+    assert(LSNode->getOffset().isUndef());
+    uint64_t Offset = cast<ConstantSDNode>(Ptr.getOperand(1))->getZExtValue();
+    // Compensate the offset for alignment
+    int64_t Compensate = -(Offset & UINT64_C(0x3));
+    return OldInfo.getWithOffset(Compensate);
+  }
+  return MachinePointerInfo(UndefValue::get(
+      Type::getInt32PtrTy(*DAG.getContext(), AMDGPUAS::PRIVATE_ADDRESS)));
+}
+
 SDValue R600TargetLowering::lowerPrivateTruncStore(StoreSDNode *Store,
                                                    SelectionDAG &DAG) const {
   SDLoc DL(Store);
@@ -1140,20 +1164,23 @@ SDValue R600TargetLowering::lowerPrivateTruncStore(StoreSDNode *Store,
   SDValue Offset = Store->getOffset();
   EVT MemVT = Store->getMemoryVT();
 
+  MachinePointerInfo PtrInfo = getPrivateMemPointerInfo(Store, DAG);
+
   SDValue LoadPtr = BasePtr;
   if (!Offset.isUndef()) {
     LoadPtr = DAG.getNode(ISD::ADD, DL, MVT::i32, BasePtr, Offset);
   }
 
   // Get dword location
-  // TODO: this should be eliminated by the future SHR ptr, 2
+  // NOTE: this should be eliminated by the future SHR ptr, 2
   SDValue Ptr = DAG.getNode(ISD::AND, DL, MVT::i32, LoadPtr,
                             DAG.getConstant(0xfffffffc, DL, MVT::i32));
 
   // Load dword
   // TODO: can we be smarter about machine pointer info?
-  MachinePointerInfo PtrInfo(AMDGPUAS::PRIVATE_ADDRESS);
-  SDValue Dst = DAG.getLoad(MVT::i32, DL, Chain, Ptr, PtrInfo);
+  SDValue Dst = DAG.getLoad(MVT::i32, DL, Chain, Ptr, PtrInfo,
+                            4 /* Alignment */,
+                            (Store->getMemOperand()->getFlags() & ~MachineMemOperand::MOStore) | MachineMemOperand::MOLoad);
 
   Chain = Dst.getValue(1);
 
@@ -1191,7 +1218,6 @@ SDValue R600TargetLowering::lowerPrivateTruncStore(StoreSDNode *Store,
   SDValue Value = DAG.getNode(ISD::OR, DL, MVT::i32, Dst, ShiftedValue);
 
   // Store dword
-  // TODO: Can we be smarter about MachinePointerInfo?
   SDValue NewStore = DAG.getStore(Chain, DL, Value, Ptr, PtrInfo);
 
   // If we are part of expanded vector, make our neighbors depend on this store
@@ -1370,6 +1396,7 @@ SDValue R600TargetLowering::lowerPrivateExtLoad(SDValue Op,
   SDValue BasePtr = Load->getBasePtr();
   SDValue Chain = Load->getChain();
   SDValue Offset = Load->getOffset();
+  MachinePointerInfo PtrInfo = getPrivateMemPointerInfo(Load, DAG);
 
   SDValue LoadPtr = BasePtr;
   if (!Offset.isUndef()) {
@@ -1383,8 +1410,9 @@ SDValue R600TargetLowering::lowerPrivateExtLoad(SDValue Op,
 
   // Load dword
   // TODO: can we be smarter about machine pointer info?
-  MachinePointerInfo PtrInfo(AMDGPUAS::PRIVATE_ADDRESS);
-  SDValue Read = DAG.getLoad(MVT::i32, DL, Chain, Ptr, PtrInfo);
+  SDValue Read = DAG.getLoad(MVT::i32, DL, Chain, Ptr, PtrInfo,
+                             4 /* Alignment */,
+                             Load->getMemOperand()->getFlags());
 
   // Get offset within the register.
   SDValue ByteIdx = DAG.getNode(ISD::AND, DL, MVT::i32,
