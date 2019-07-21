@@ -1458,118 +1458,115 @@ bool AMDGPULibCalls::evaluateScalarMathFunc(FuncInfo &FInfo,
   default : return false;
 
   case AMDGPULibFunc::EI_ACOS:
-    Res0 = acos(opr0);
+    Res0 = std::acos(opr0);
     return true;
 
   case AMDGPULibFunc::EI_ACOSH:
-    // acosh(x) == log(x + sqrt(x*x - 1))
-    Res0 = log(opr0 + sqrt(opr0*opr0 - 1.0));
+    Res0 = std::acosh(opr0);
     return true;
 
   case AMDGPULibFunc::EI_ACOSPI:
-    Res0 = acos(opr0) / MATH_PI;
+    Res0 = std::acos(opr0) / MATH_PI;
     return true;
 
   case AMDGPULibFunc::EI_ASIN:
-    Res0 = asin(opr0);
+    Res0 = std::asin(opr0);
     return true;
 
   case AMDGPULibFunc::EI_ASINH:
-    // asinh(x) == log(x + sqrt(x*x + 1))
-    Res0 = log(opr0 + sqrt(opr0*opr0 + 1.0));
+    Res0 = std::asinh(opr0);
     return true;
 
   case AMDGPULibFunc::EI_ASINPI:
-    Res0 = asin(opr0) / MATH_PI;
+    Res0 = std::asin(opr0) / MATH_PI;
     return true;
 
   case AMDGPULibFunc::EI_ATAN:
-    Res0 = atan(opr0);
+    Res0 = std::atan(opr0);
     return true;
 
   case AMDGPULibFunc::EI_ATANH:
-    // atanh(x) == (log(x+1) - log(x-1))/2;
-    Res0 = (log(opr0 + 1.0) - log(opr0 - 1.0))/2.0;
+    Res0 = std::atanh(opr0);
     return true;
 
   case AMDGPULibFunc::EI_ATANPI:
-    Res0 = atan(opr0) / MATH_PI;
+    Res0 = std::atan(opr0) / MATH_PI;
     return true;
 
   case AMDGPULibFunc::EI_CBRT:
-    Res0 = (opr0 < 0.0) ? -pow(-opr0, 1.0/3.0) : pow(opr0, 1.0/3.0);
+    Res0 = std::cbrt(opr0);
     return true;
 
   case AMDGPULibFunc::EI_COS:
-    Res0 = cos(opr0);
+    Res0 = std::cos(opr0);
     return true;
 
   case AMDGPULibFunc::EI_COSH:
-    Res0 = cosh(opr0);
+    Res0 = std::cosh(opr0);
     return true;
 
   case AMDGPULibFunc::EI_COSPI:
-    Res0 = cos(MATH_PI * opr0);
+    Res0 = std::cos(MATH_PI * opr0);
     return true;
 
   case AMDGPULibFunc::EI_EXP:
-    Res0 = exp(opr0);
+    Res0 = std::exp(opr0);
     return true;
 
   case AMDGPULibFunc::EI_EXP2:
-    Res0 = pow(2.0, opr0);
+    Res0 = std::exp2(opr0);
     return true;
 
   case AMDGPULibFunc::EI_EXP10:
-    Res0 = pow(10.0, opr0);
+    Res0 = std::pow(10.0, opr0);
     return true;
 
   case AMDGPULibFunc::EI_EXPM1:
-    Res0 = exp(opr0) - 1.0;
+    Res0 = std::expm1(opr0);
     return true;
 
   case AMDGPULibFunc::EI_LOG:
-    Res0 = log(opr0);
+    Res0 = std::log(opr0);
     return true;
 
   case AMDGPULibFunc::EI_LOG2:
-    Res0 = log(opr0) / log(2.0);
+    Res0 = std::log2(opr0);
     return true;
 
   case AMDGPULibFunc::EI_LOG10:
-    Res0 = log(opr0) / log(10.0);
+    Res0 = std::log10(opr0);
     return true;
 
   case AMDGPULibFunc::EI_RSQRT:
-    Res0 = 1.0 / sqrt(opr0);
+    Res0 = 1.0 / std::sqrt(opr0);
     return true;
 
   case AMDGPULibFunc::EI_SIN:
-    Res0 = sin(opr0);
+    Res0 = std::sin(opr0);
     return true;
 
   case AMDGPULibFunc::EI_SINH:
-    Res0 = sinh(opr0);
+    Res0 = std::sinh(opr0);
     return true;
 
   case AMDGPULibFunc::EI_SINPI:
-    Res0 = sin(MATH_PI * opr0);
+    Res0 = std::sin(MATH_PI * opr0);
     return true;
 
   case AMDGPULibFunc::EI_SQRT:
-    Res0 = sqrt(opr0);
+    Res0 = std::sqrt(opr0);
     return true;
 
   case AMDGPULibFunc::EI_TAN:
-    Res0 = tan(opr0);
+    Res0 = std::tan(opr0);
     return true;
 
   case AMDGPULibFunc::EI_TANH:
-    Res0 = tanh(opr0);
+    Res0 = std::tanh(opr0);
     return true;
 
   case AMDGPULibFunc::EI_TANPI:
-    Res0 = tan(MATH_PI * opr0);
+    Res0 = std::tan(MATH_PI * opr0);
     return true;
 
   case AMDGPULibFunc::EI_RECIP:
@@ -1583,7 +1580,7 @@ bool AMDGPULibCalls::evaluateScalarMathFunc(FuncInfo &FInfo,
 
   case AMDGPULibFunc::EI_POW:
   case AMDGPULibFunc::EI_POWR:
-    Res0 = pow(opr0, opr1);
+    Res0 = std::pow(opr0, opr1);
     return true;
 
   case AMDGPULibFunc::EI_POWN: {
@@ -1606,12 +1603,15 @@ bool AMDGPULibCalls::evaluateScalarMathFunc(FuncInfo &FInfo,
 
   // with ptr arg
   case AMDGPULibFunc::EI_SINCOS:
-    Res0 = sin(opr0);
-    Res1 = cos(opr0);
+    Res0 = std::sin(opr0);
+    Res1 = std::cos(opr0);
     return true;
 
   // three-arg functions
   case AMDGPULibFunc::EI_FMA:
+    Res0 = std::fma(opr0, opr1, opr2);
+    return true;
+
   case AMDGPULibFunc::EI_MAD:
     Res0 = opr0 * opr1 + opr2;
     return true;
