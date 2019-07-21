@@ -213,6 +213,8 @@ public:
 
     if (ConstantInt *CI = dyn_cast<ConstantInt>(V))
       return markConstantRange(ConstantRange(CI->getValue()));
+    if (ConstantFP *CFP = dyn_cast<ConstantFP>(V))
+      return markConstantRange(ConstantRange(CFP->getValueAPF()));
 
     assert(isUnknown() || isUndef());
     Tag = constant;
@@ -226,6 +228,13 @@ public:
       return markConstantRange(
           ConstantRange(CI->getValue() + 1, CI->getValue()));
 
+    if (ConstantFP *CF = dyn_cast<ConstantFP>(V)) {
+      APFloat ValL = CF->getValueAPF(), ValU = CF->getValueAPF();
+      assert(!ValL.isNaN());
+      ValL.next(false); // nextUp
+      ValU.next(true);  // nextDown
+      return markConstantRange(ConstantRange(ValL, ValU, true));
+    }
     if (isa<UndefValue>(V))
       return false;
 
@@ -340,19 +349,30 @@ public:
     if (isConstant() && Other.isConstant())
       return ConstantExpr::getCompare(Pred, getConstant(), Other.getConstant());
 
-    // Integer constants are represented as ConstantRanges with single
-    // elements.
+    // Constants are represented as ConstantRanges with single elements.
     if (!isConstantRange() || !Other.isConstantRange())
       return nullptr;
 
     const auto &CR = getConstantRange();
     const auto &OtherCR = Other.getConstantRange();
-    if (ConstantRange::makeSatisfyingICmpRegion(Pred, OtherCR).contains(CR))
-      return ConstantInt::getTrue(Ty);
-    if (ConstantRange::makeSatisfyingICmpRegion(
-            CmpInst::getInversePredicate(Pred), OtherCR)
-            .contains(CR))
-      return ConstantInt::getFalse(Ty);
+    // Can't compare across different types.
+    assert(CR.getIsFloat() == OtherCR.getIsFloat());
+
+    if (CR.getIsFloat()) {
+      if (ConstantRange::makeSatisfyingFCmpRegion(Pred, OtherCR).contains(CR))
+        return ConstantInt::getTrue(Ty);
+      if (ConstantRange::makeSatisfyingFCmpRegion(
+              CmpInst::getInversePredicate(Pred), OtherCR)
+              .contains(CR))
+        return ConstantInt::getFalse(Ty);
+    } else {
+      if (ConstantRange::makeSatisfyingICmpRegion(Pred, OtherCR).contains(CR))
+        return ConstantInt::getTrue(Ty);
+      if (ConstantRange::makeSatisfyingICmpRegion(
+              CmpInst::getInversePredicate(Pred), OtherCR)
+              .contains(CR))
+        return ConstantInt::getFalse(Ty);
+    }
 
     return nullptr;
   }

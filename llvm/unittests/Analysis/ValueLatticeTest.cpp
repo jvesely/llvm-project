@@ -31,16 +31,25 @@ protected:
 TEST_F(ValueLatticeTest, ValueLatticeGetters) {
   auto I32Ty = IntegerType::get(Context, 32);
   auto *C1 = ConstantInt::get(I32Ty, 1);
+  auto VLEC1 = ValueLatticeElement::get(C1);
+  auto VLENotC1 = ValueLatticeElement::getNot(C1);
 
-  EXPECT_TRUE(ValueLatticeElement::get(C1).isConstantRange());
+  EXPECT_TRUE(VLEC1.isConstantRange());
+  EXPECT_TRUE(VLENotC1.isConstantRange());
+  EXPECT_TRUE(VLEC1.getConstantRange().contains(C1->getValue()));
+  EXPECT_FALSE(VLENotC1.getConstantRange().contains(C1->getValue()));
+
   EXPECT_TRUE(
       ValueLatticeElement::getRange({C1->getValue()}).isConstantRange());
   EXPECT_TRUE(ValueLatticeElement::getOverdefined().isOverdefined());
 
-  auto FloatTy = Type::getFloatTy(Context);
-  auto *C2 = ConstantFP::get(FloatTy, 1.1);
-  EXPECT_TRUE(ValueLatticeElement::get(C2).isConstant());
-  EXPECT_TRUE(ValueLatticeElement::getNot(C2).isNotConstant());
+  auto *C2 = ConstantFP::get(Context, APFloat(1.1));
+  auto VLEC2 = ValueLatticeElement::get(C2);
+  auto VLENotC2 = ValueLatticeElement::getNot(C2);
+  EXPECT_TRUE(VLEC2.isConstantRange());
+  EXPECT_TRUE(VLENotC2.isConstantRange());
+  EXPECT_TRUE(VLEC2.getConstantRange().contains(C2->getValueAPF()));
+  EXPECT_FALSE(VLENotC2.getConstantRange().contains(C2->getValueAPF()));
 }
 
 TEST_F(ValueLatticeTest, MarkConstantRange) {
@@ -167,11 +176,14 @@ TEST_F(ValueLatticeTest, getCompareFloat) {
   EXPECT_TRUE(
       LV1.mergeIn(ValueLatticeElement::get(ConstantFP::get(FloatTy, 2.2)),
                   M.getDataLayout()));
+  // Both 1.0 and 2.2 are >= 1.0
+  EXPECT_TRUE(LV1.getCompare(CmpInst::FCMP_OGE, I1Ty, LV2)->isOneValue());
+  // Neither 1.0 nor 2.2 are < 1.0
+  EXPECT_TRUE(LV1.getCompare(CmpInst::FCMP_OLT, I1Ty, LV2)->isZeroValue());
+
   EXPECT_EQ(LV1.getCompare(CmpInst::FCMP_OEQ, I1Ty, LV2), nullptr);
-  EXPECT_EQ(LV1.getCompare(CmpInst::FCMP_OGE, I1Ty, LV2), nullptr);
   EXPECT_EQ(LV1.getCompare(CmpInst::FCMP_OLE, I1Ty, LV2), nullptr);
   EXPECT_EQ(LV1.getCompare(CmpInst::FCMP_ONE, I1Ty, LV2), nullptr);
-  EXPECT_EQ(LV1.getCompare(CmpInst::FCMP_OLT, I1Ty, LV2), nullptr);
   EXPECT_EQ(LV1.getCompare(CmpInst::FCMP_OGT, I1Ty, LV2), nullptr);
 }
 

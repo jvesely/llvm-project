@@ -192,12 +192,12 @@ L4:
 define void @unfold1(double %x, double %y) nounwind {
 entry:
   %sub = fsub double %x, %y
-  %cmp = fcmp ogt double %sub, 1.000000e+01
+  %cmp = fcmp ogt double %sub, -1.000000e+01
   br i1 %cmp, label %cond.end4, label %cond.false
 
 cond.false:                                       ; preds = %entry
   %add = fadd double %x, %y
-  %cmp1 = fcmp ogt double %add, 1.000000e+01
+  %cmp1 = fcmp ogt double %add, -1.000000e+01
   %add. = select i1 %cmp1, double %add, double 0.000000e+00
   br label %cond.end4
 

@@ -19,9 +19,17 @@ raw_ostream &operator<<(raw_ostream &OS, const ValueLatticeElement &Val) {
 
   if (Val.isNotConstant())
     return OS << "notconstant<" << *Val.getNotConstant() << ">";
-  if (Val.isConstantRange())
-    return OS << "constantrange<" << Val.getConstantRange().getLower() << ", "
-              << Val.getConstantRange().getUpper() << ">";
+  if (Val.isConstantRange()) {
+    if (Val.getConstantRange().getIsFloat()) {
+      SmallVector<char, 16> Lo, Up;
+      Val.getConstantRange().getLowerFP().toString(Lo);
+      Val.getConstantRange().getUpperFP().toString(Up);
+      return OS << "constantrange<" << Lo << ", " << Up << ">";
+    } else {
+      return OS << "constantrange<" << Val.getConstantRange().getLower() << ", "
+                << Val.getConstantRange().getUpper() << ">";
+    }
+  }
   return OS << "constant<" << *Val.getConstant() << ">";
 }
 } // end namespace llvm
