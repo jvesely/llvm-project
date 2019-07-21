@@ -449,6 +449,7 @@ public:
   friend IEEEFloat scalbn(IEEEFloat X, int Exp, roundingMode);
 
   friend IEEEFloat frexp(const IEEEFloat &X, int &Exp, roundingMode);
+  friend IEEEFloat exp(const IEEEFloat &X, roundingMode);
 
   /// \name Special value setters.
   /// @{
@@ -583,6 +584,7 @@ hash_code hash_value(const IEEEFloat &Arg);
 int ilogb(const IEEEFloat &Arg);
 IEEEFloat scalbn(IEEEFloat X, int Exp, IEEEFloat::roundingMode);
 IEEEFloat frexp(const IEEEFloat &Val, int &Exp, IEEEFloat::roundingMode RM);
+IEEEFloat exp(const IEEEFloat &Val, IEEEFloat::roundingMode RM);
 
 // This mode implements more precise float in terms of two APFloats.
 // The interface and layout is designed for arbitray underlying semantics,
@@ -679,6 +681,7 @@ public:
   friend int ilogb(const DoubleAPFloat &Arg);
   friend DoubleAPFloat scalbn(DoubleAPFloat X, int Exp, roundingMode);
   friend DoubleAPFloat frexp(const DoubleAPFloat &X, int &Exp, roundingMode);
+  friend DoubleAPFloat exp(const DoubleAPFloat &X, roundingMode);
   friend hash_code hash_value(const DoubleAPFloat &Arg);
 };
 
@@ -1201,6 +1204,7 @@ public:
   friend int ilogb(const APFloat &Arg) { return ilogb(Arg.getIEEE()); }
   friend APFloat scalbn(APFloat X, int Exp, roundingMode RM);
   friend APFloat frexp(const APFloat &X, int &Exp, roundingMode RM);
+  friend APFloat exp(const APFloat &X, roundingMode RM);
   friend IEEEFloat;
   friend DoubleAPFloat;
 };
@@ -1289,6 +1293,15 @@ inline APFloat maximum(const APFloat &A, const APFloat &B) {
   return (A.compare(B) == APFloat::cmpLessThan) ? B : A;
 }
 
+/// Equivalent of C standard library function.
+LLVM_READONLY
+inline APFloat exp(const APFloat &X, APFloat::roundingMode RM) {
+  if (APFloat::usesLayout<detail::IEEEFloat>(X.getSemantics()))
+    return APFloat(exp(X.U.IEEE, RM), X.getSemantics());
+  if (APFloat::usesLayout<detail::DoubleAPFloat>(X.getSemantics()))
+    return APFloat(exp(X.U.Double, RM), X.getSemantics());
+  llvm_unreachable("Unexpected semantics");
+}
 } // namespace llvm
 
 #undef APFLOAT_DISPATCH_ON_SEMANTICS
