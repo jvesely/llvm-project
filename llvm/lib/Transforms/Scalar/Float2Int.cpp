@@ -201,14 +201,22 @@ void Float2IntPass::walkBackwards(const SmallPtrSetImpl<Instruction*> &Roots) {
       seen(I, badRange());
       break;
 
-    case Instruction::UIToFP:
+    case Instruction::UIToFP: {
+      // Path terminated cleanly - use the type of the integer input to seed
+      // the analysis.
+      unsigned BW = I->getOperand(0)->getType()->getPrimitiveSizeInBits();
+      APInt Min = APInt::getMinValue(BW).zextOrSelf(MaxIntegerBW + 1);
+      APInt Max = APInt::getMaxValue(BW).zextOrSelf(MaxIntegerBW + 1);
+      seen(I, validateRange(ConstantRange(std::move(Min), std::move(Max))));
+      continue;
+    }
     case Instruction::SIToFP: {
       // Path terminated cleanly - use the type of the integer input to seed
       // the analysis.
       unsigned BW = I->getOperand(0)->getType()->getPrimitiveSizeInBits();
-      auto Input = ConstantRange::getFull(BW);
-      auto CastOp = (Instruction::CastOps)I->getOpcode();
-      seen(I, validateRange(Input.castOp(CastOp, MaxIntegerBW+1)));
+      APInt Min = APInt::getSignedMinValue(BW).sextOrSelf(MaxIntegerBW + 1);
+      APInt Max = APInt::getSignedMaxValue(BW).sextOrSelf(MaxIntegerBW + 1);
+      seen(I, validateRange(ConstantRange(std::move(Min), std::move(Max))));
       continue;
     }
 
@@ -267,7 +275,7 @@ void Float2IntPass::walkForwards() {
     case Instruction::FMul:
       Op = [I](ArrayRef<ConstantRange> Ops) {
         assert(Ops.size() == 2 && "its a binary operator!");
-        auto BinOp = (Instruction::BinaryOps) I->getOpcode();
+        auto BinOp = mapBinOpcode(I->getOpcode());
         return Ops[0].binaryOp(BinOp, Ops[1]);
       };
       break;
@@ -278,12 +286,13 @@ void Float2IntPass::walkForwards() {
     //
     case Instruction::FPToUI:
     case Instruction::FPToSI:
-      Op = [I](ArrayRef<ConstantRange> Ops) {
+      Op = [I, this](ArrayRef<ConstantRange> Ops) {
         assert(Ops.size() == 1 && "FPTo[US]I is a unary operator!");
         // Note: We're ignoring the casts output size here as that's what the
         // caller expects.
-        auto CastOp = (Instruction::CastOps)I->getOpcode();
-        return Ops[0].castOp(CastOp, MaxIntegerBW+1);
+        if (Ops[0].getBitWidth() == MaxIntegerBW+1)
+          return Ops[0];
+        return badRange();
       };
       break;
 
