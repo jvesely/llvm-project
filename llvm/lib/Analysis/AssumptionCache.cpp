@@ -109,6 +109,11 @@ static void findAffectedValues(CallInst *CI,
       AddAffectedFromEq(B);
     }
   }
+
+  if (match(Cond, m_FCmp(Pred, m_Value(A), m_Value(B)))) {
+    AddAffected(A);
+    AddAffected(B);
+  }
 }
 
 void AssumptionCache::updateAffectedValues(CallInst *CI) {
