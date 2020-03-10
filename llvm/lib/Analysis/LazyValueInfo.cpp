@@ -69,8 +69,9 @@ AnalysisKey LazyValueAnalysis::Key;
 /// reachable code.
 static bool hasSingleValue(const ValueLatticeElement &Val) {
   if (Val.isConstantRange() &&
-      Val.getConstantRange().isSingleElement())
-    // Integer constants are single element ranges
+      (Val.getConstantRange().isSingleElement() ||
+       Val.getConstantRange().isSingleElementFP()))
+    // Integer and FP constants are single element ranges
     return true;
   if (Val.isConstant())
     // Non integer constants
@@ -648,19 +649,19 @@ bool LazyValueInfoImpl::solveBlockValueImpl(ValueLatticeElement &Res,
     Res = ValueLatticeElement::getNot(ConstantPointerNull::get(PT));
     return true;
   }
+  if (BinaryOperator *BO = dyn_cast<BinaryOperator>(BBI))
+    return solveBlockValueBinaryOp(Res, BO, BB);
+
   if (BBI->getType()->isIntegerTy()) {
     if (auto *CI = dyn_cast<CastInst>(BBI))
       return solveBlockValueCast(Res, CI, BB);
 
-    if (BinaryOperator *BO = dyn_cast<BinaryOperator>(BBI))
-      return solveBlockValueBinaryOp(Res, BO, BB);
-
     if (auto *EVI = dyn_cast<ExtractValueInst>(BBI))
       return solveBlockValueExtractValue(Res, EVI, BB);
-
-    if (auto *II = dyn_cast<IntrinsicInst>(BBI))
-      return solveBlockValueIntrinsic(Res, II, BB);
   }
+
+  if (auto *II = dyn_cast<IntrinsicInst>(BBI))
+    return solveBlockValueIntrinsic(Res, II, BB);
 
   LLVM_DEBUG(dbgs() << " compute BB '" << BB->getName()
                     << "' - unknown inst def found.\n");
@@ -901,6 +902,10 @@ bool LazyValueInfoImpl::solveBlockValueSelect(ValueLatticeElement &BBLV,
         switch (SPR.Flavor) {
         default:
           llvm_unreachable("unexpected minmax type!");
+	case SPF_FMINNUM:                /// Floating point minimum
+	  return TrueCR.fmin(FalseCR);
+	case SPF_FMAXNUM:                /// Floating point maximum
+	  return TrueCR.fmax(FalseCR);
         case SPF_SMIN:                   /// Signed minimum
           return TrueCR.smin(FalseCR);
         case SPF_UMIN:                   /// Unsigned minimum
@@ -1004,9 +1009,12 @@ Optional<ConstantRange> LazyValueInfoImpl::getRangeForOperand(unsigned Op,
     if (pushBlockValue(std::make_pair(BB, I->getOperand(Op))))
       return None;
 
-  const unsigned OperandBitWidth =
-    DL.getTypeSizeInBits(I->getOperand(Op)->getType());
-  ConstantRange Range = ConstantRange::getFull(OperandBitWidth);
+  Type *OpType = I->getOperand(Op)->getType();
+  const unsigned OperandBitWidth = DL.getTypeSizeInBits(OpType);
+  ConstantRange Range = OpType->isFloatingPointTy()
+    ? ConstantRange::getFull(OpType->getFltSemantics())
+    : ConstantRange::getFull(OperandBitWidth);
+
   if (hasBlockValue(I->getOperand(Op), BB)) {
     ValueLatticeElement Val = getBlockValue(I->getOperand(Op), BB);
     intersectAssumeOrGuardBlockValueConstantRange(I->getOperand(Op), Val, I);
@@ -1254,6 +1262,65 @@ static ValueLatticeElement getValueFromICmpCondition(Value *Val, ICmpInst *ICI,
   return ValueLatticeElement::getOverdefined();
 }
 
+static ValueLatticeElement getValueFromFCmpCondition(Value *Val, FCmpInst *FCI,
+                                                     bool isTrueDest) {
+  Value *LHS = FCI->getOperand(0);
+  Value *RHS = FCI->getOperand(1);
+
+  // TODO: This only works with a direct comparison.
+  // More complex expressions are not supported.
+  if ((Val != LHS && Val != RHS) || (!isa<ConstantFP>(LHS) && !isa<ConstantFP>(RHS)))
+    return ValueLatticeElement::getOverdefined();
+
+  ConstantFP *Const = dyn_cast<ConstantFP>(RHS);
+  Const = Const ? Const : dyn_cast<ConstantFP>(LHS);
+  APFloat ConstVal = Const->getValueAPF();
+
+  // Makes sure Val is on the left hand side
+  if (Val == RHS)
+    FCI->swapOperands();
+  CmpInst::Predicate Predicate = FCI->getPredicate();
+
+  APFloat Lower(ConstVal.getSemantics(), APFloat::uninitialized);
+  APFloat Upper(ConstVal.getSemantics(), APFloat::uninitialized);
+
+  switch (Predicate) {
+  default:
+    llvm_unreachable("Invalid FCMP predicate");
+  case FCmpInst::FCMP_UEQ:
+  case FCmpInst::FCMP_OEQ:
+    Upper = ConstVal.isZero() ? APFloat::getZero(ConstVal.getSemantics()) : ConstVal;
+    Lower = ConstVal.isZero() ? APFloat::getZero(ConstVal.getSemantics(), !FCI->hasNoSignedZeros()) : ConstVal;
+    break;
+  case FCmpInst::FCMP_OGT:
+  case FCmpInst::FCMP_OGE:
+  case FCmpInst::FCMP_UGT:
+  case FCmpInst::FCMP_UGE:
+    Lower = ConstVal;
+    if (FCmpInst::isFalseWhenEqual(Predicate))
+      Lower.next(false); // next up
+    Upper = APFloat::getInf(ConstVal.getSemantics()); // Pos Infinity
+    break;
+  case FCmpInst::FCMP_OLT:
+  case FCmpInst::FCMP_OLE:
+  case FCmpInst::FCMP_ULT:
+  case FCmpInst::FCMP_ULE:
+    Lower = APFloat::getInf(ConstVal.getSemantics(), true); // Neg Infinity
+    Upper = ConstVal;
+    if (FCI->isFalseWhenEqual())
+      Upper.next(true); // next down
+    break;
+  case FCmpInst::FCMP_ONE:
+  case FCmpInst::FCMP_UNE:
+  case FCmpInst::FCMP_ORD:
+  case FCmpInst::FCMP_UNO:
+    Lower = APFloat::getInf(ConstVal.getSemantics(), true); // Neg Infinity
+    Upper = APFloat::getInf(ConstVal.getSemantics()); // Pos Infinity
+  }
+  auto R = ConstantRange(Lower, Upper, FCmpInst::isUnordered(Predicate));
+  return ValueLatticeElement::getRange(isTrueDest ? R : R.inverse());
+}
+
 // Handle conditions of the form
 // extractvalue(op.with.overflow(%x, C), 1).
 static ValueLatticeElement getValueFromOverflowCondition(
@@ -1285,6 +1352,9 @@ getValueFromConditionImpl(Value *Val, Value *Cond, bool isTrueDest,
                           DenseMap<Value*, ValueLatticeElement> &Visited) {
   if (ICmpInst *ICI = dyn_cast<ICmpInst>(Cond))
     return getValueFromICmpCondition(Val, ICI, isTrueDest);
+
+  if (FCmpInst *FCI = dyn_cast<FCmpInst>(Cond))
+    return getValueFromFCmpCondition(Val, FCI, isTrueDest);
 
   if (auto *EVI = dyn_cast<ExtractValueInst>(Cond))
     if (auto *WO = dyn_cast<WithOverflowInst>(EVI->getAggregateOperand()))
@@ -1711,26 +1781,31 @@ Constant *LazyValueInfo::getConstant(Value *V, BasicBlock *BB,
     const ConstantRange &CR = Result.getConstantRange();
     if (const APInt *SingleVal = CR.getSingleElement())
       return ConstantInt::get(V->getContext(), *SingleVal);
+    if (const APFloat *SingleVal = CR.getSingleElementFP())
+      return ConstantFP::get(V->getContext(), *SingleVal);
   }
   return nullptr;
 }
 
 ConstantRange LazyValueInfo::getConstantRange(Value *V, BasicBlock *BB,
                                               Instruction *CxtI) {
-  assert(V->getType()->isIntegerTy());
-  unsigned Width = V->getType()->getIntegerBitWidth();
   const DataLayout &DL = BB->getModule()->getDataLayout();
+  Type * ValType = V->getType();
+  bool IsFloat = ValType->isFloatingPointTy();
+
   ValueLatticeElement Result =
       getImpl(PImpl, AC, &DL, DT).getValueInBlock(V, BB, CxtI);
   if (Result.isUnknown())
-    return ConstantRange::getEmpty(Width);
+    return IsFloat ? ConstantRange::getEmpty(ValType->getFltSemantics())
+                   : ConstantRange::getEmpty(ValType->getIntegerBitWidth());
   if (Result.isConstantRange())
     return Result.getConstantRange();
   // We represent ConstantInt constants as constant ranges but other kinds
   // of integer constants, i.e. ConstantExpr will be tagged as constants
   assert(!(Result.isConstant() && isa<ConstantInt>(Result.getConstant())) &&
          "ConstantInt value must be represented as constantrange");
-  return ConstantRange::getFull(Width);
+  return IsFloat ? ConstantRange::getFull(ValType->getFltSemantics())
+                 : ConstantRange::getFull(ValType->getIntegerBitWidth());
 }
 
 /// Determine whether the specified value is known to be a
@@ -1748,6 +1823,9 @@ Constant *LazyValueInfo::getConstantOnEdge(Value *V, BasicBlock *FromBB,
     const ConstantRange &CR = Result.getConstantRange();
     if (const APInt *SingleVal = CR.getSingleElement())
       return ConstantInt::get(V->getContext(), *SingleVal);
+
+    if (const APFloat *SingleVal = CR.getSingleElementFP())
+      return ConstantFP::get(V->getContext(), *SingleVal);
   }
   return nullptr;
 }
@@ -1756,20 +1834,23 @@ ConstantRange LazyValueInfo::getConstantRangeOnEdge(Value *V,
                                                     BasicBlock *FromBB,
                                                     BasicBlock *ToBB,
                                                     Instruction *CxtI) {
-  unsigned Width = V->getType()->getIntegerBitWidth();
   const DataLayout &DL = FromBB->getModule()->getDataLayout();
   ValueLatticeElement Result =
       getImpl(PImpl, AC, &DL, DT).getValueOnEdge(V, FromBB, ToBB, CxtI);
+  Type * ValType = V->getType();
+  bool IsFloat = ValType->isFloatingPointTy();
 
   if (Result.isUnknown())
-    return ConstantRange::getEmpty(Width);
+    return IsFloat ? ConstantRange::getEmpty(ValType->getFltSemantics())
+                   : ConstantRange::getEmpty(ValType->getIntegerBitWidth());
   if (Result.isConstantRange())
     return Result.getConstantRange();
   // We represent ConstantInt constants as constant ranges but other kinds
   // of integer constants, i.e. ConstantExpr will be tagged as constants
   assert(!(Result.isConstant() && isa<ConstantInt>(Result.getConstant())) &&
          "ConstantInt value must be represented as constantrange");
-  return ConstantRange::getFull(Width);
+  return IsFloat ? ConstantRange::getFull(ValType->getFltSemantics())
+                 : ConstantRange::getFull(ValType->getIntegerBitWidth());
 }
 
 static LazyValueInfo::Tristate
@@ -1786,29 +1867,54 @@ getPredicateResult(unsigned Pred, Constant *C, const ValueLatticeElement &Val,
 
   if (Val.isConstantRange()) {
     ConstantInt *CI = dyn_cast<ConstantInt>(C);
-    if (!CI) return LazyValueInfo::Unknown;
+    ConstantFP *CFP = dyn_cast<ConstantFP>(C);
+    if (!CI && !CFP)
+      return LazyValueInfo::Unknown;
 
     const ConstantRange &CR = Val.getConstantRange();
-    if (Pred == ICmpInst::ICMP_EQ) {
+    switch (Pred) {
+    case ICmpInst::ICMP_EQ:
       if (!CR.contains(CI->getValue()))
         return LazyValueInfo::False;
-
       if (CR.isSingleElement())
         return LazyValueInfo::True;
-    } else if (Pred == ICmpInst::ICMP_NE) {
+      break;
+    case ICmpInst::ICMP_NE:
       if (!CR.contains(CI->getValue()))
         return LazyValueInfo::True;
-
       if (CR.isSingleElement())
         return LazyValueInfo::False;
-    } else {
+      break;
+    case FCmpInst::FCMP_OEQ:
+      if (!CR.contains(CFP->getValueAPF()))
+        return LazyValueInfo::False;
+      if (CR.getSingleElementFP())
+        return LazyValueInfo::True;
+      break;
+    case FCmpInst::FCMP_ONE:
+      if (!CR.contains(CFP->getValueAPF()))
+        return LazyValueInfo::True;
+      if (CR.getSingleElementFP())
+        return LazyValueInfo::False;
+      break;
+    default:
       // Handle more complex predicates.
-      ConstantRange TrueValues = ConstantRange::makeExactICmpRegion(
-          (ICmpInst::Predicate)Pred, CI->getValue());
-      if (TrueValues.contains(CR))
-        return LazyValueInfo::True;
-      if (TrueValues.inverse().contains(CR))
-        return LazyValueInfo::False;
+      if (CI) {
+        ConstantRange TrueValues = ConstantRange::makeExactICmpRegion(
+            (ICmpInst::Predicate)Pred, CI->getValue());
+        if (TrueValues.contains(CR))
+          return LazyValueInfo::True;
+        if (TrueValues.inverse().contains(CR))
+          return LazyValueInfo::False;
+      }
+      if (CFP) {
+        ConstantRange TrueValues = ConstantRange::makeExactFCmpRegion(
+            (FCmpInst::Predicate)Pred, CFP->getValueAPF());
+        if (TrueValues.contains(CR))
+          return LazyValueInfo::True;
+        if (TrueValues.inverse().contains(CR))
+          return LazyValueInfo::False;
+      }
     }
     return LazyValueInfo::Unknown;
   }

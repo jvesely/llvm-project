@@ -203,20 +203,20 @@ define i1 @test4(i32* %p, i32 %qval, i1 %unknown) {
 ; CHECK-NEXT:    [[CMP1:%.*]] = icmp slt i32 [[PVAL]], 255
 ; CHECK-NEXT:    br i1 [[CMP1]], label [[NEXT:%.*]], label [[EXIT:%.*]]
 ; CHECK:       next:
-; CHECK-NEXT:    [[MIN:%.*]] = select i1 [[UNKNOWN:%.*]], double 1.000000e+00, double 0.000000e+00
+; CHECK-NEXT:    [[MIN:%.*]] = select i1 [[UNKNOWN:%.*]], double 3.000000e+02, double 0.000000e+00
 ; CHECK-NEXT:    br label [[NEXT2:%.*]]
 ; CHECK:       next2:
 ; CHECK-NEXT:    [[RES:%.*]] = fcmp oeq double [[MIN]], 3.000000e+02
 ; CHECK-NEXT:    ret i1 [[RES]]
 ; CHECK:       exit:
 ; CHECK-NEXT:    ret i1 true
-;
+
   %pval = load i32, i32* %p
   %cmp1 = icmp slt i32 %pval, 255
   br i1 %cmp1, label %next, label %exit
 
 next:
-  %min = select i1 %unknown, double 1.0, double 0.0
+  %min = select i1 %unknown, double 300.0, double 0.0
   ;; TODO: This pointless branch shouldn't be neccessary
   br label %next2
 next2:
