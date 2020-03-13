@@ -1165,6 +1165,18 @@ bool LazyValueInfoImpl::solveBlockValueIntrinsic(ValueLatticeElement &BBLV,
                                                  BasicBlock *BB) {
   if (auto *SI = dyn_cast<SaturatingInst>(II))
     return solveBlockValueSaturatingIntrinsic(BBLV, SI, BB);
+  switch (II->getIntrinsicID()) {
+  case Intrinsic::exp: {
+    Optional<ConstantRange> Res = getRangeForOperand(0, II, BB);
+    if (!Res.hasValue())
+      // More work to do before applying this transfer rule.
+      return false;
+
+    ConstantRange Range = Res.getValue();
+    BBLV = ValueLatticeElement::getRange(Range.exp());
+    return true;
+  }
+  }
 
   LLVM_DEBUG(dbgs() << " compute BB '" << BB->getName()
                     << "' - overdefined (unknown intrinsic).\n");
