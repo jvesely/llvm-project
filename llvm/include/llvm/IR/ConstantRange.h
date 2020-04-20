@@ -580,6 +580,9 @@ public:
   /// value in \p Other.
   ConstantRange sshl_sat(const ConstantRange &Other) const;
 
+  /// Perform an exponential on floating point range
+  ConstantRange exp() const;
+
   /// Return a new range that is the logical not of the current set.
   ConstantRange inverse() const;
 

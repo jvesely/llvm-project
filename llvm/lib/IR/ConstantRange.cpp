@@ -2137,6 +2137,15 @@ ConstantRange ConstantRange::sshl_sat(const ConstantRange &Other) const {
   return getNonEmpty(std::move(NewL), std::move(NewU));
 }
 
+ConstantRange ConstantRange::exp() const {
+  assert(isFloat);
+  if (isEmptySet())
+    return getEmpty();
+
+  return ConstantRange(llvm::exp(LowerFP, APFloat::rmTowardNegative),
+                       llvm::exp(UpperFP, APFloat::rmTowardPositive), canBeNaN);
+}
+
 ConstantRange ConstantRange::inverse() const {
   if (isFullSet())
     return getEmpty();
