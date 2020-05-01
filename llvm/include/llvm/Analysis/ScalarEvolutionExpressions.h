@@ -38,9 +38,9 @@ class Type;
   enum SCEVTypes {
     // These should be ordered in terms of increasing complexity to make the
     // folders simpler.
-    scConstant, scTruncate, scZeroExtend, scSignExtend, scAddExpr, scMulExpr,
-    scUDivExpr, scAddRecExpr, scUMaxExpr, scSMaxExpr, scUMinExpr, scSMinExpr,
-    scUnknown, scCouldNotCompute
+    scConstant, scConstantFP, scTruncate, scZeroExtend, scSignExtend,
+    scAddExpr, scMulExpr, scUDivExpr, scAddRecExpr, scUMaxExpr, scSMaxExpr,
+    scUMinExpr, scSMinExpr, scUnknown, scCouldNotCompute
   };
 
   /// This class represents a constant integer value.
@@ -61,6 +61,27 @@ class Type;
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static bool classof(const SCEV *S) {
       return S->getSCEVType() == scConstant;
+    }
+  };
+
+  /// This class represents a constant integer value.
+  class SCEVConstantFP : public SCEV {
+    friend class ScalarEvolution;
+
+    ConstantFP *V;
+
+    SCEVConstantFP(const FoldingSetNodeIDRef ID, ConstantFP *v) :
+      SCEV(ID, scConstantFP, 1), V(v) {}
+
+  public:
+    ConstantFP *getValue() const { return V; }
+    const APFloat &getAPFloat() const { return getValue()->getValueAPF(); }
+
+    Type *getType() const { return V->getType(); }
+
+    /// Methods for support type inquiry through isa, cast, and dyn_cast:
+    static bool classof(const SCEV *S) {
+      return S->getSCEVType() == scConstantFP;
     }
   };
 
@@ -514,6 +535,8 @@ class Type;
       switch (S->getSCEVType()) {
       case scConstant:
         return ((SC*)this)->visitConstant((const SCEVConstant*)S);
+      case scConstantFP:
+        return ((SC*)this)->visitConstantFP((const SCEVConstantFP*)S);
       case scTruncate:
         return ((SC*)this)->visitTruncateExpr((const SCEVTruncateExpr*)S);
       case scZeroExtend:
@@ -578,6 +601,7 @@ class Type;
 
         switch (S->getSCEVType()) {
         case scConstant:
+        case scConstantFP:
         case scUnknown:
           break;
         case scTruncate:
@@ -671,6 +695,10 @@ class Type;
 
     const SCEV *visitConstant(const SCEVConstant *Constant) {
       return Constant;
+    }
+
+    const SCEV *visitConstantFP(const SCEVConstantFP *ConstantFP) {
+      return ConstantFP;
     }
 
     const SCEV *visitTruncateExpr(const SCEVTruncateExpr *Expr) {

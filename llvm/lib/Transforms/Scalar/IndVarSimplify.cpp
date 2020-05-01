@@ -1337,7 +1337,8 @@ WidenIV::WidenedRecTy WidenIV::getWideRecurrence(NarrowIVDefUse DU) {
 
   const SCEV *NarrowExpr = SE->getSCEV(DU.NarrowUse);
   if (SE->getTypeSizeInBits(NarrowExpr->getType()) >=
-      SE->getTypeSizeInBits(WideType)) {
+      SE->getTypeSizeInBits(WideType) ||
+      NarrowExpr->getType()->isFloatingPointTy() != WideType->isFloatingPointTy()) {
     // NarrowUse implicitly widens its operand. e.g. a gep with a narrow
     // index. So don't follow this use.
     return {nullptr, Unknown};

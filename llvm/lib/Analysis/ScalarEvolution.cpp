@@ -247,6 +247,9 @@ void SCEV::print(raw_ostream &OS) const {
   case scConstant:
     cast<SCEVConstant>(this)->getValue()->printAsOperand(OS, false);
     return;
+  case scConstantFP:
+    cast<SCEVConstantFP>(this)->getValue()->printAsOperand(OS, false);
+    return;
   case scTruncate: {
     const SCEVTruncateExpr *Trunc = cast<SCEVTruncateExpr>(this);
     const SCEV *Op = Trunc->getOperand();
@@ -364,6 +367,8 @@ Type *SCEV::getType() const {
   switch (static_cast<SCEVTypes>(getSCEVType())) {
   case scConstant:
     return cast<SCEVConstant>(this)->getType();
+  case scConstantFP:
+    return cast<SCEVConstantFP>(this)->getType();
   case scTruncate:
   case scZeroExtend:
   case scSignExtend:
@@ -441,8 +446,28 @@ const SCEV *ScalarEvolution::getConstant(const APInt &Val) {
 
 const SCEV *
 ScalarEvolution::getConstant(Type *Ty, uint64_t V, bool isSigned) {
-  IntegerType *ITy = cast<IntegerType>(getEffectiveSCEVType(Ty));
-  return getConstant(ConstantInt::get(ITy, V, isSigned));
+  Type *EffectiveTy = getEffectiveSCEVType(Ty);
+  if (IntegerType *ITy = dyn_cast<IntegerType>(EffectiveTy))
+    return getConstant(ConstantInt::get(ITy, V, isSigned));
+  if (EffectiveTy->isFloatingPointTy())
+    return getConstant(cast<ConstantFP>(ConstantFP::get(EffectiveTy,
+      APFloat(EffectiveTy->getFltSemantics(), V))));
+  llvm_unreachable("Unknown SCEV constant type");
+}
+
+const SCEV *ScalarEvolution::getConstant(ConstantFP *V) {
+  FoldingSetNodeID ID;
+  ID.AddInteger(scConstantFP);
+  ID.AddPointer(V);
+  void *IP = nullptr;
+  if (const SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) return S;
+  SCEV *S = new (SCEVAllocator) SCEVConstantFP(ID.Intern(SCEVAllocator), V);
+  UniqueSCEVs.InsertNode(S, IP);
+  return S;
+}
+
+const SCEV *ScalarEvolution::getConstant(const APFloat &Val) {
+  return getConstant(ConstantFP::get(getContext(), Val));
 }
 
 SCEVCastExpr::SCEVCastExpr(const FoldingSetNodeIDRef ID,
@@ -697,6 +722,20 @@ static int CompareSCEVComplexity(
     if (LBitWidth != RBitWidth)
       return (int)LBitWidth - (int)RBitWidth;
     return LA.ult(RA) ? -1 : 1;
+  }
+
+  case scConstantFP: {
+    const SCEVConstantFP *LC = cast<SCEVConstantFP>(LHS);
+    const SCEVConstantFP *RC = cast<SCEVConstantFP>(RHS);
+
+    // Compare constant values.
+    const APFloat &LA = LC->getAPFloat();
+    const APFloat &RA = RC->getAPFloat();
+    unsigned LBitWidth = LA.getSizeInBits(LA.getSemantics());
+    unsigned RBitWidth = RA.getSizeInBits(RA.getSemantics());
+    if (LBitWidth != RBitWidth)
+      return (int)LBitWidth - (int)RBitWidth;
+    return LA.compare(RA) == APFloat::cmpLessThan ? -1 : 1;
   }
 
   case scAddRecExpr: {
@@ -972,6 +1011,28 @@ public:
       APInt::sdivrem(NumeratorVal, DenominatorVal, QuotientVal, RemainderVal);
       Quotient = SE.getConstant(QuotientVal);
       Remainder = SE.getConstant(RemainderVal);
+      return;
+    }
+  }
+
+  void visitConstantFP(const SCEVConstantFP *Numerator) {
+    if (const SCEVConstantFP *D = dyn_cast<SCEVConstantFP>(Denominator)) {
+      APFloat NumeratorVal = Numerator->getAPFloat();
+      APFloat DenominatorVal = D->getAPFloat();
+      unsigned NumeratorPrec = APFloat::semanticsPrecision(NumeratorVal.getSemantics());
+      unsigned DenominatorPrec = APFloat::semanticsPrecision(DenominatorVal.getSemantics());
+
+      bool LosesInfo = false;
+      if (NumeratorPrec > DenominatorPrec)
+        DenominatorVal.convert(NumeratorVal.getSemantics(),
+          APFloat::rmNearestTiesToEven, &LosesInfo);
+      else if (NumeratorPrec < DenominatorPrec)
+        NumeratorVal.convert(DenominatorVal.getSemantics(),
+          APFloat::rmNearestTiesToEven, &LosesInfo);
+      assert(!LosesInfo);
+
+      Quotient = SE.getConstant(NumeratorVal / DenominatorVal);
+      Remainder = SE.getConstant(APFloat::getZero(NumeratorVal.getSemantics()));
       return;
     }
   }
@@ -3772,7 +3833,7 @@ const SCEV *ScalarEvolution::getUnknown(Value *V) {
 /// target-specific information.
 bool ScalarEvolution::isSCEVable(Type *Ty) const {
   // Integers and pointers are always SCEVable.
-  return Ty->isIntOrPtrTy();
+  return Ty->isIntOrPtrTy() || Ty->isFloatingPointTy();
 }
 
 /// Return the size in bits of the specified type, for which isSCEVable must
@@ -3789,8 +3850,7 @@ uint64_t ScalarEvolution::getTypeSizeInBits(Type *Ty) const {
 /// true. For pointer types, this is the pointer index sized integer type.
 Type *ScalarEvolution::getEffectiveSCEVType(Type *Ty) const {
   assert(isSCEVable(Ty) && "Type is not SCEVable!");
-
-  if (Ty->isIntegerTy())
+  if (Ty->isIntegerTy() || Ty->isFloatingPointTy())
     return Ty;
 
   // The only other support type is pointer.
@@ -4018,7 +4078,7 @@ const SCEV *ScalarEvolution::getMinusSCEV(const SCEV *LHS, const SCEV *RHS,
   // We represent LHS - RHS as LHS + (-1)*RHS. This transformation
   // makes it so that we cannot make much use of NUW.
   auto AddFlags = SCEV::FlagAnyWrap;
-  const bool RHSIsNotMinSigned =
+  const bool RHSIsNotMinSigned = RHS->getType()->isFloatingPointTy() ? false :
       !getSignedRangeMin(RHS).isMinSignedValue();
   if (maskFlags(Flags, SCEV::FlagNSW) == SCEV::FlagNSW) {
     // Let M be the minimum representable signed value. Then (-1)*RHS
@@ -5193,8 +5253,9 @@ static bool IsAvailableOnEntry(const Loop *L, DominatorTree &DT, const SCEV *S,
 
     bool follow(const SCEV *S) {
       switch (S->getSCEVType()) {
-      case scConstant: case scTruncate: case scZeroExtend: case scSignExtend:
+      case scConstant: case scConstantFP: case scTruncate:
       case scAddExpr: case scMulExpr: case scUMaxExpr: case scSMaxExpr:
+      case scZeroExtend: case scSignExtend:
       case scUMinExpr:
       case scSMinExpr:
         // These expressions are available if their operand(s) is/are.
@@ -5352,6 +5413,10 @@ const SCEV *ScalarEvolution::createNodeForSelectOrPHI(Instruction *I,
 
   Value *LHS = ICI->getOperand(0);
   Value *RHS = ICI->getOperand(1);
+  // Operations below assume we can combine expression in condition with LHS/RHS
+  // It works only if they are of compatible types.
+  if (LHS->getType()->isFloatingPointTy() != TrueVal->getType()->isFloatingPointTy())
+    return getUnknown(I);
 
   switch (ICI->getPredicate()) {
   case ICmpInst::ICMP_SLT:
@@ -5452,6 +5517,9 @@ uint32_t ScalarEvolution::GetMinTrailingZerosImpl(const SCEV *S) {
   if (const SCEVConstant *C = dyn_cast<SCEVConstant>(S))
     return C->getAPInt().countTrailingZeros();
 
+  if (const SCEVConstantFP *C = dyn_cast<SCEVConstantFP>(S))
+    return C->getAPFloat().bitcastToAPInt().countTrailingZeros();
+
   if (const SCEVTruncateExpr *T = dyn_cast<SCEVTruncateExpr>(S))
     return std::min(GetMinTrailingZeros(T->getOperand()),
                     (uint32_t)getTypeSizeInBits(T->getType()));
@@ -5514,6 +5582,8 @@ uint32_t ScalarEvolution::GetMinTrailingZerosImpl(const SCEV *S) {
   }
 
   if (const SCEVUnknown *U = dyn_cast<SCEVUnknown>(S)) {
+    if (U->getValue()->getType()->isFloatingPointTy())
+      return 0;
     // For a SCEVUnknown, ask ValueTracking.
     KnownBits Known = computeKnownBits(U->getValue(), getDataLayout(), 0, &AC, nullptr, &DT);
     return Known.countMinTrailingZeros();
@@ -5563,15 +5633,19 @@ ScalarEvolution::getRangeRef(const SCEV *S,
 
   if (const SCEVConstant *C = dyn_cast<SCEVConstant>(S))
     return setRange(C, SignHint, ConstantRange(C->getAPInt()));
+  if (const SCEVConstantFP *C = dyn_cast<SCEVConstantFP>(S))
+    return setRange(C, ScalarEvolution::HINT_RANGE_SIGNED, ConstantRange(C->getAPFloat()));
 
   unsigned BitWidth = getTypeSizeInBits(S->getType());
-  ConstantRange ConservativeResult(BitWidth, /*isFullSet=*/true);
+  ConstantRange ConservativeResult = S->getType()->isFloatingPointTy() ?
+    ConstantRange::getFull(S->getType()->getFltSemantics()):
+    ConstantRange::getFull(BitWidth);
   using OBO = OverflowingBinaryOperator;
 
   // If the value has known zeros, the maximum value will have those known zeros
   // as well.
   uint32_t TZ = GetMinTrailingZeros(S);
-  if (TZ != 0) {
+  if (TZ != 0 && !S->getType()->isFloatingPointTy()) {
     if (SignHint == ScalarEvolution::HINT_RANGE_UNSIGNED)
       ConservativeResult =
           ConstantRange(APInt::getMinValue(BitWidth),
@@ -5590,8 +5664,11 @@ ScalarEvolution::getRangeRef(const SCEV *S,
     if (Add->hasNoUnsignedWrap())
       WrapType |= OBO::NoUnsignedWrap;
     for (unsigned i = 1, e = Add->getNumOperands(); i != e; ++i)
-      X = X.addWithNoWrap(getRangeRef(Add->getOperand(i), SignHint),
-                          WrapType, RangeType);
+      if (Add->getType()->isFloatingPointTy())
+        X = X.fadd(getRangeRef(Add->getOperand(i), SignHint));
+      else
+        X = X.addWithNoWrap(getRangeRef(Add->getOperand(i), SignHint),
+                            WrapType, RangeType);
     return setRange(Add, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
@@ -5599,7 +5676,10 @@ ScalarEvolution::getRangeRef(const SCEV *S,
   if (const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(S)) {
     ConstantRange X = getRangeRef(Mul->getOperand(0), SignHint);
     for (unsigned i = 1, e = Mul->getNumOperands(); i != e; ++i)
-      X = X.multiply(getRangeRef(Mul->getOperand(i), SignHint));
+      if (Mul->getType()->isFloatingPointTy())
+        X = X.fmultiply(getRangeRef(Mul->getOperand(i), SignHint));
+      else
+        X = X.multiply(getRangeRef(Mul->getOperand(i), SignHint));
     return setRange(Mul, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
@@ -5749,7 +5829,8 @@ ScalarEvolution::getRangeRef(const SCEV *S,
     } else {
       assert(SignHint == ScalarEvolution::HINT_RANGE_SIGNED &&
              "generalize as needed!");
-      unsigned NS = ComputeNumSignBits(U->getValue(), DL, 0, &AC, nullptr, &DT);
+      unsigned NS = S->getType()->isFloatingPointTy() ? 1 :
+        ComputeNumSignBits(U->getValue(), DL, 0, &AC, nullptr, &DT);
       // If the pointer size is larger than the index size type, this can cause
       // NS to be larger than BitWidth. So compensate for this.
       if (U->getType()->isPointerTy()) {
@@ -5770,7 +5851,9 @@ ScalarEvolution::getRangeRef(const SCEV *S,
     if (const PHINode *Phi = dyn_cast<PHINode>(U->getValue())) {
       // Make sure that we do not run over cycled Phis.
       if (PendingPhiRanges.insert(Phi).second) {
-        ConstantRange RangeFromOps(BitWidth, /*isFullSet=*/false);
+        ConstantRange RangeFromOps = Phi->getType()->isFloatingPointTy() ?
+            ConstantRange::getEmpty(Phi->getType()->getFltSemantics()):
+            ConstantRange::getEmpty(BitWidth);
         for (auto &Op : Phi->operands()) {
           auto OpRange = getRangeRef(getSCEV(Op), SignHint);
           RangeFromOps = RangeFromOps.unionWith(OpRange);
@@ -6006,6 +6089,7 @@ ConstantRange ScalarEvolution::getRangeViaFactoring(const SCEV *Start,
 
 SCEV::NoWrapFlags ScalarEvolution::getNoWrapFlagsFromUB(const Value *V) {
   if (isa<ConstantExpr>(V)) return SCEV::FlagAnyWrap;
+  if (!isa<OverflowingBinaryOperator>(V)) return SCEV::FlagAnyWrap;
   const BinaryOperator *BinOp = cast<BinaryOperator>(V);
 
   // Return early if there are no flags to propagate to the SCEV.
@@ -6185,6 +6269,8 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
       return getUnknown(UndefValue::get(V->getType()));
   } else if (ConstantInt *CI = dyn_cast<ConstantInt>(V))
     return getConstant(CI);
+  else if (ConstantFP *CFP = dyn_cast<ConstantFP>(V))
+    return getConstant(CFP);
   else if (isa<ConstantPointerNull>(V))
     return getZero(V->getType());
   else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V))
@@ -6511,7 +6597,8 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
 
   case Instruction::BitCast:
     // BitCasts are no-op casts so we just eliminate the cast.
-    if (isSCEVable(U->getType()) && isSCEVable(U->getOperand(0)->getType()))
+    if (isSCEVable(U->getType()) && isSCEVable(U->getOperand(0)->getType()) &&
+	U->getType()->isFloatingPointTy() == U->getOperand(0)->getType()->isFloatingPointTy())
       return getSCEV(U->getOperand(0));
     break;
 
@@ -8114,6 +8201,8 @@ static Constant *BuildConstantFromSCEV(const SCEV *V) {
       break;
     case scConstant:
       return cast<SCEVConstant>(V)->getValue();
+    case scConstantFP:
+      return cast<SCEVConstantFP>(V)->getValue();
     case scUnknown:
       return dyn_cast<Constant>(cast<SCEVUnknown>(V)->getValue());
     case scSignExtend: {
@@ -8206,6 +8295,7 @@ static Constant *BuildConstantFromSCEV(const SCEV *V) {
 
 const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
   if (isa<SCEVConstant>(V)) return V;
+  if (isa<SCEVConstantFP>(V)) return V;
 
   // If this instruction is evolved from a constant-evolving PHI, compute the
   // exit value from the loop without using SCEVs.
@@ -9151,18 +9241,34 @@ bool ScalarEvolution::SimplifyICmpOperands(ICmpInst::Predicate &Pred,
 }
 
 bool ScalarEvolution::isKnownNegative(const SCEV *S) {
+  if (S->getType()->isFloatingPointTy()) {
+    const APFloat Max = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMaxFP();
+    return Max.isNegative() && !Max.isNegZero();
+  }
   return getSignedRangeMax(S).isNegative();
 }
 
 bool ScalarEvolution::isKnownPositive(const SCEV *S) {
+  if (S->getType()->isFloatingPointTy()) {
+    const APFloat Min = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMinFP();
+    return !Min.isNegative() && !Min.isPosZero();
+  }
   return getSignedRangeMin(S).isStrictlyPositive();
 }
 
 bool ScalarEvolution::isKnownNonNegative(const SCEV *S) {
+  if (S->getType()->isFloatingPointTy()) {
+    const APFloat Min = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMinFP();
+    return !Min.isNegative() || Min.isNegZero();
+  }
   return !getSignedRangeMin(S).isNegative();
 }
 
 bool ScalarEvolution::isKnownNonPositive(const SCEV *S) {
+  if (S->getType()->isFloatingPointTy()) {
+    const APFloat Max = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMaxFP();
+    return Max.isNegative() || Max.isPosZero();
+  }
   return !getSignedRangeMax(S).isStrictlyPositive();
 }
 
@@ -11634,8 +11740,10 @@ void ScalarEvolution::print(raw_ostream &OS) const {
         const SCEV *SV = SE.getSCEV(&I);
         SV->print(OS);
         if (!isa<SCEVCouldNotCompute>(SV)) {
-          OS << " U: ";
-          SE.getUnsignedRange(SV).print(OS);
+	  if (!SV->getType()->isFloatingPointTy()) {
+            OS << " U: ";
+            SE.getUnsignedRange(SV).print(OS);
+	  }
           OS << " S: ";
           SE.getSignedRange(SV).print(OS);
         }
@@ -11727,6 +11835,7 @@ ScalarEvolution::LoopDisposition
 ScalarEvolution::computeLoopDisposition(const SCEV *S, const Loop *L) {
   switch (static_cast<SCEVTypes>(S->getSCEVType())) {
   case scConstant:
+  case scConstantFP:
     return LoopInvariant;
   case scTruncate:
   case scZeroExtend:
@@ -11834,6 +11943,7 @@ ScalarEvolution::BlockDisposition
 ScalarEvolution::computeBlockDisposition(const SCEV *S, const BasicBlock *BB) {
   switch (static_cast<SCEVTypes>(S->getSCEVType())) {
   case scConstant:
+  case scConstantFP:
     return ProperlyDominatesBlock;
   case scTruncate:
   case scZeroExtend:

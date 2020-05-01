@@ -363,6 +363,10 @@ namespace llvm {
       return S->getValue();
     }
 
+    Value *visitConstantFP(const SCEVConstantFP *S) {
+      return S->getValue();
+    }
+
     Value *visitTruncateExpr(const SCEVTruncateExpr *S);
 
     Value *visitZeroExtendExpr(const SCEVZeroExtendExpr *S);
