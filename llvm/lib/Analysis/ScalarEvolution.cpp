@@ -1184,6 +1184,10 @@ private:
 static const SCEV *BinomialCoefficient(const SCEV *It, unsigned K,
                                        ScalarEvolution &SE,
                                        Type *ResultTy) {
+  // We don't know how to combine fp and int types
+  if (It->getType()->isFloatingPointTy() != ResultTy->isFloatingPointTy())
+    return SE.getCouldNotCompute();
+
   // Handle the simplest case efficiently.
   if (K == 1)
     return SE.getTruncateOrZeroExtend(It, ResultTy);
@@ -4015,11 +4019,19 @@ const SCEV *ScalarEvolution::getNegativeSCEV(const SCEV *V,
   if (const SCEVConstant *VC = dyn_cast<SCEVConstant>(V))
     return getConstant(
                cast<ConstantInt>(ConstantExpr::getNeg(VC->getValue())));
+  if (const SCEVConstantFP *VC = dyn_cast<SCEVConstantFP>(V))
+    return getConstant(
+               cast<ConstantFP>(ConstantExpr::getFNeg(VC->getValue())));
 
   Type *Ty = V->getType();
   Ty = getEffectiveSCEVType(Ty);
-  return getMulExpr(
-      V, getConstant(cast<ConstantInt>(Constant::getAllOnesValue(Ty))), Flags);
+  if (Ty->isIntOrPtrTy())
+    return getMulExpr(
+        V, getConstant(cast<ConstantInt>(Constant::getAllOnesValue(Ty))), Flags);
+  if (Ty->isFloatingPointTy())
+    return getMulExpr(
+        V, getConstant(cast<ConstantFP>(ConstantFP::get(Ty, -1.0))), Flags);
+  llvm_unreachable("Unsupported type!");
 }
 
 /// If Expr computes ~A, return A else return nullptr
@@ -4170,6 +4182,9 @@ ScalarEvolution::getNoopOrAnyExtend(const SCEV *V, Type *Ty) {
 const SCEV *
 ScalarEvolution::getTruncateOrNoop(const SCEV *V, Type *Ty) {
   Type *SrcTy = V->getType();
+  if (SrcTy->isFloatingPointTy() && Ty->isFloatingPointTy() &&
+      &SrcTy->getFltSemantics() == &Ty->getFltSemantics())
+    return V;
   assert(SrcTy->isIntOrPtrTy() && Ty->isIntOrPtrTy() &&
          "Cannot truncate or noop with non-integer arguments!");
   assert(getTypeSizeInBits(SrcTy) >= getTypeSizeInBits(Ty) &&
@@ -4581,6 +4596,9 @@ static Optional<BinaryOp> MatchBinaryOp(Value *V, DominatorTree &DT) {
   case Instruction::Or:
   case Instruction::AShr:
   case Instruction::Shl:
+  case Instruction::FAdd:
+  case Instruction::FMul:
+  case Instruction::FSub:
     return BinaryOp(Op);
 
   case Instruction::Xor:
@@ -6281,6 +6299,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
   Operator *U = cast<Operator>(V);
   if (auto BO = MatchBinaryOp(U, DT)) {
     switch (BO->Opcode) {
+    case Instruction::FAdd:
     case Instruction::Add: {
       // The simple thing to do would be to just call getSCEV on both operands
       // and call getAddExpr with the result. However if we're looking at a
@@ -6315,14 +6334,16 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
           }
         }
 
-        if (BO->Opcode == Instruction::Sub)
+        if (BO->Opcode == Instruction::Sub || BO->Opcode == Instruction::FSub)
           AddOps.push_back(getNegativeSCEV(getSCEV(BO->RHS)));
         else
           AddOps.push_back(getSCEV(BO->RHS));
 
         auto NewBO = MatchBinaryOp(BO->LHS, DT);
         if (!NewBO || (NewBO->Opcode != Instruction::Add &&
-                       NewBO->Opcode != Instruction::Sub)) {
+                       NewBO->Opcode != Instruction::Sub &&
+                       NewBO->Opcode != Instruction::FAdd &&
+                       NewBO->Opcode != Instruction::FSub)) {
           AddOps.push_back(getSCEV(BO->LHS));
           break;
         }
@@ -6332,6 +6353,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
       return getAddExpr(AddOps);
     }
 
+    case Instruction::FMul:
     case Instruction::Mul: {
       SmallVector<const SCEV *, 4> MulOps;
       do {
@@ -6351,7 +6373,8 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
 
         MulOps.push_back(getSCEV(BO->RHS));
         auto NewBO = MatchBinaryOp(BO->LHS, DT);
-        if (!NewBO || NewBO->Opcode != Instruction::Mul) {
+        if (!NewBO || (NewBO->Opcode != Instruction::Mul &&
+                       NewBO->Opcode != Instruction::FMul)) {
           MulOps.push_back(getSCEV(BO->LHS));
           break;
         }
@@ -6364,6 +6387,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
       return getUDivExpr(getSCEV(BO->LHS), getSCEV(BO->RHS));
     case Instruction::URem:
       return getURemExpr(getSCEV(BO->LHS), getSCEV(BO->RHS));
+    case Instruction::FSub:
     case Instruction::Sub: {
       SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap;
       if (BO->Op)
@@ -6598,7 +6622,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
   case Instruction::BitCast:
     // BitCasts are no-op casts so we just eliminate the cast.
     if (isSCEVable(U->getType()) && isSCEVable(U->getOperand(0)->getType()) &&
-	U->getType()->isFloatingPointTy() == U->getOperand(0)->getType()->isFloatingPointTy())
+        U->getType()->isFloatingPointTy() == U->getOperand(0)->getType()->isFloatingPointTy())
       return getSCEV(U->getOperand(0));
     break;
 
@@ -11740,10 +11764,10 @@ void ScalarEvolution::print(raw_ostream &OS) const {
         const SCEV *SV = SE.getSCEV(&I);
         SV->print(OS);
         if (!isa<SCEVCouldNotCompute>(SV)) {
-	  if (!SV->getType()->isFloatingPointTy()) {
+          if (!SV->getType()->isFloatingPointTy()) {
             OS << " U: ";
             SE.getUnsignedRange(SV).print(OS);
-	  }
+          }
           OS << " S: ";
           SE.getSignedRange(SV).print(OS);
         }

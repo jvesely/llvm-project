@@ -2681,6 +2681,9 @@ void LSRInstance::CollectInterestingTypesAndFactors() {
          std::next(I); NewStrideIter != E; ++NewStrideIter) {
       const SCEV *OldStride = *I;
       const SCEV *NewStride = *NewStrideIter;
+      if (NewStride->getType()->isFloatingPointTy() !=
+          OldStride->getType()->isFloatingPointTy())
+        continue;
 
       if (SE.getTypeSizeInBits(OldStride->getType()) !=
           SE.getTypeSizeInBits(NewStride->getType())) {

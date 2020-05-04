@@ -621,7 +621,7 @@ const Loop *SCEVExpander::getRelevantLoop(const SCEV *S) {
   if (!Pair.second)
     return Pair.first->second;
 
-  if (isa<SCEVConstant>(S))
+  if (isa<SCEVConstant>(S) || isa<SCEVConstantFP>(S))
     // A constant has no relevant loops.
     return nullptr;
   if (const SCEVUnknown *U = dyn_cast<SCEVUnknown>(S)) {
@@ -739,7 +739,9 @@ Value *SCEVExpander::visitAddExpr(const SCEVAddExpr *S) {
       // Instead of doing a negate and add, just do a subtract.
       Value *W = expandCodeFor(SE.getNegativeSCEV(Op), Ty);
       Sum = InsertNoopCastOfTo(Sum, Ty);
-      Sum = InsertBinop(Instruction::Sub, Sum, W, SCEV::FlagAnyWrap,
+      Instruction::BinaryOps Op = Ty->isFloatingPointTy() ?
+        Instruction::FSub : Instruction::Sub;
+      Sum = InsertBinop(Op, Sum, W, SCEV::FlagAnyWrap,
                         /*IsSafeToHoist*/ true);
       ++I;
     } else {
@@ -748,7 +750,9 @@ Value *SCEVExpander::visitAddExpr(const SCEVAddExpr *S) {
       Sum = InsertNoopCastOfTo(Sum, Ty);
       // Canonicalize a constant to the RHS.
       if (isa<Constant>(Sum)) std::swap(Sum, W);
-      Sum = InsertBinop(Instruction::Add, Sum, W, S->getNoWrapFlags(),
+      Instruction::BinaryOps Op = Ty->isFloatingPointTy() ?
+        Instruction::FAdd : Instruction::Add;
+      Sum = InsertBinop(Op, Sum, W, S->getNoWrapFlags(),
                         /*IsSafeToHoist*/ true);
       ++I;
     }
@@ -843,7 +847,9 @@ Value *SCEVExpander::visitMulExpr(const SCEVMulExpr *S) {
                            ConstantInt::get(Ty, RHS->logBase2()), NWFlags,
                            /*IsSafeToHoist*/ true);
       } else {
-        Prod = InsertBinop(Instruction::Mul, Prod, W, S->getNoWrapFlags(),
+	Instruction::BinaryOps Op = Prod->getType()->isFloatingPointTy() ?
+            Instruction::FMul : Instruction::Mul;
+        Prod = InsertBinop(Op, Prod, W, S->getNoWrapFlags(),
                            /*IsSafeToHoist*/ true);
       }
     }
@@ -1066,6 +1072,11 @@ Value *SCEVExpander::expandIVInc(PHINode *PN, Value *StepV, const Loop *L,
       IncV = Builder.CreateBitCast(IncV, PN->getType());
       rememberInstruction(IncV);
     }
+  } else if (ExpandTy->isFloatingPointTy()) {
+    IncV = useSubtract ?
+      Builder.CreateFSub(PN, StepV, Twine(IVName) + ".iv.next") :
+      Builder.CreateFAdd(PN, StepV, Twine(IVName) + ".iv.next");
+    rememberInstruction(IncV);
   } else {
     IncV = useSubtract ?
       Builder.CreateSub(PN, StepV, Twine(IVName) + ".iv.next") :
