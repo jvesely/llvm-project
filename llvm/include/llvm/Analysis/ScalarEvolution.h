@@ -1255,7 +1255,7 @@ private:
                               const SCEV *MaxNotTaken,
                               std::unique_ptr<SCEVUnionPredicate> Predicate)
       : ExitingBlock(ExitingBlock), ExactNotTaken(ExactNotTaken),
-        MaxNotTaken(ExactNotTaken), Predicate(std::move(Predicate)) {}
+        MaxNotTaken(MaxNotTaken), Predicate(std::move(Predicate)) {}
 
     bool hasAlwaysTruePredicate() const {
       return !Predicate || Predicate->isAlwaysTrue();
