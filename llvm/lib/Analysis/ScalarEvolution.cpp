@@ -1184,13 +1184,13 @@ private:
 static const SCEV *BinomialCoefficient(const SCEV *It, unsigned K,
                                        ScalarEvolution &SE,
                                        Type *ResultTy) {
+  // Handle the simplest case efficiently.
+  if (K == 1)
+    return SE.convertTypeZE(It, ResultTy);
+
   // We don't know how to combine fp and int types
   if (It->getType()->isFloatingPointTy() != ResultTy->isFloatingPointTy())
     return SE.getCouldNotCompute();
-
-  // Handle the simplest case efficiently.
-  if (K == 1)
-    return SE.getTruncateOrZeroExtend(It, ResultTy);
 
   // We are using the following formula for BC(It, K):
   //
@@ -2515,6 +2515,27 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
 
     if (Ops.size() == 1) return Ops[0];
   }
+  // If there are any constants, fold them together.
+  Idx = 0;
+  if (const SCEVConstantFP *LHSC = dyn_cast<SCEVConstantFP>(Ops[0])) {
+    ++Idx;
+    assert(Idx < Ops.size());
+    while (const SCEVConstantFP *RHSC = dyn_cast<SCEVConstantFP>(Ops[Idx])) {
+      // We found two constants, fold them together!
+      Ops[0] = getConstant(LHSC->getAPFloat() + RHSC->getAPFloat());
+      if (Ops.size() == 2) return Ops[0];
+      Ops.erase(Ops.begin()+1);  // Erase the folded element
+      LHSC = cast<SCEVConstantFP>(Ops[0]);
+    }
+
+    // If we are left with a constant zero being added, strip it off.
+    if (LHSC->getValue()->isZero()) {
+      Ops.erase(Ops.begin());
+      --Idx;
+    }
+
+    if (Ops.size() == 1) return Ops[0];
+  }
 
   // Limit recursion calls depth.
   if (Depth > MaxArithDepth || hasHugeExpression(Ops))
@@ -3063,6 +3084,34 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
                                AddRec->getNoWrapFlags(SCEV::FlagNW));
         }
       }
+    }
+
+    if (Ops.size() == 1)
+      return Ops[0];
+  }
+
+  // If there are any FP constants, fold them together.
+  Idx = 0;
+  if (const SCEVConstantFP *LHSC = dyn_cast<SCEVConstantFP>(Ops[0])) {
+
+    ++Idx;
+    while (const SCEVConstantFP *RHSC = dyn_cast<SCEVConstantFP>(Ops[Idx])) {
+      // We found two constants, fold them together!
+      ConstantFP *Fold =
+          ConstantFP::get(getContext(), LHSC->getAPFloat() * RHSC->getAPFloat());
+      Ops[0] = getConstant(Fold);
+      Ops.erase(Ops.begin()+1);  // Erase the folded element
+      if (Ops.size() == 1) return Ops[0];
+      LHSC = cast<SCEVConstantFP>(Ops[0]);
+    }
+
+    // If we are left with a constant one being multiplied, strip it off.
+    if (cast<SCEVConstantFP>(Ops[0])->getValue()->isExactlyValue(1.0)) {
+      Ops.erase(Ops.begin());
+      --Idx;
+    } else if (cast<SCEVConstantFP>(Ops[0])->getValue()->isZero()) {
+      // If we have a multiply of zero, it will always be zero.
+      return Ops[0];
     }
 
     if (Ops.size() == 1)
@@ -4117,6 +4166,22 @@ const SCEV *ScalarEvolution::getMinusSCEV(const SCEV *LHS, const SCEV *RHS,
   auto NegFlags = RHSIsNotMinSigned ? SCEV::FlagNSW : SCEV::FlagAnyWrap;
 
   return getAddExpr(LHS, getNegativeSCEV(RHS, NegFlags), AddFlags, Depth);
+}
+
+const SCEV *ScalarEvolution::convertTypeZE(const SCEV *V, Type *Ty, unsigned Depth)
+{
+  if (V->getType()->isIntOrPtrTy() && Ty->isIntOrPtrTy())
+    return getTruncateOrZeroExtend(V, Ty, Depth);
+
+  // The only other supported conversion is int->float
+  assert(V->getType()->isIntOrPtrTy() && Ty->isFloatingPointTy());
+  if (V->getSCEVType() != scConstant)
+    return getCouldNotCompute();
+
+  APInt Val = cast<SCEVConstant>(V)->getAPInt();
+  APFloat ValFP(Ty->getFltSemantics());
+  ValFP.convertFromAPInt(Val, false, APFloat::rmNearestTiesToEven);
+  return getConstant(ValFP);
 }
 
 const SCEV *ScalarEvolution::getTruncateOrZeroExtend(const SCEV *V, Type *Ty,
@@ -5957,6 +6022,47 @@ static ConstantRange getRangeForAffineARHelper(APInt Step,
   return ConstantRange::getNonEmpty(std::move(NewLower), std::move(NewUpper));
 }
 
+static ConstantRange getRangeForAffineARHelperFP(APFloat Step,
+                                                 const ConstantRange &StartRange,
+                                                 const APFloat &MaxBECount) {
+  // If either Step or MaxBECount is 0, then the expression won't change, and we
+  // just need to return the initial range.
+  if (Step.isZero() || MaxBECount.isZero())
+    return StartRange;
+
+  // If we don't know anything about the initial value (i.e. StartRange is
+  // FullRange), then we don't know anything about the final range either.
+  // Return FullRange.
+  if (StartRange.isFullSet())
+    return StartRange;
+
+  // If Step is signed and negative, then we use its absolute value, but we also
+  // note that we're moving in the opposite direction.
+  bool Descending = Step.isNegative();
+
+  Step = abs(Step);
+
+  // Offset is by how much the expression can change. Checks above guarantee no
+  // overflow here.
+  APFloat Offset = Step * MaxBECount;
+
+  // Minimum value of the final range will match the minimal value of StartRange
+  // if the expression is increasing and will be decreased by Offset otherwise.
+  // Maximum value of the final range will match the maximal value of StartRange
+  // if the expression is decreasing and will be increased by Offset otherwise.
+  APFloat StartLower = StartRange.getLowerFP();
+  APFloat StartUpper = StartRange.getUpperFP();
+  APFloat MovedBoundary = Descending ? (StartLower - std::move(Offset))
+                                     : (StartUpper + std::move(Offset));
+
+  APFloat NewLower =
+      Descending ? std::move(MovedBoundary) : std::move(StartLower);
+  APFloat NewUpper =
+      Descending ? std::move(StartUpper) : std::move(MovedBoundary);
+
+  return ConstantRange(std::move(NewLower), std::move(NewUpper));
+}
+
 ConstantRange ScalarEvolution::getRangeForAffineAR(const SCEV *Start,
                                                    const SCEV *Step,
                                                    const SCEV *MaxBECount,
@@ -5965,12 +6071,26 @@ ConstantRange ScalarEvolution::getRangeForAffineAR(const SCEV *Start,
          getTypeSizeInBits(MaxBECount->getType()) <= BitWidth &&
          "Precondition!");
 
-  MaxBECount = getNoopOrZeroExtend(MaxBECount, Start->getType());
-  APInt MaxBECountValue = getUnsignedRangeMax(MaxBECount);
-
   // First, consider step signed.
   ConstantRange StartSRange = getSignedRange(Start);
   ConstantRange StepSRange = getSignedRange(Step);
+
+  if (Start->getType()->isFloatingPointTy()) {
+    APInt MaxBECountValue = getUnsignedRangeMax(MaxBECount);
+    assert(&StartSRange.getLowerFP().getSemantics() ==
+           &StepSRange.getLowerFP().getSemantics());
+    APFloat MaxBEFP(StepSRange.getLowerFP().getSemantics());
+    MaxBEFP.convertFromAPInt(MaxBECountValue, false, APFloat::rmNearestTiesToEven);
+    ConstantRange Res = getRangeForAffineARHelperFP(StepSRange.getSignedMinFP(),
+                                                    StartSRange, MaxBEFP);
+    Res = Res.unionWith(getRangeForAffineARHelperFP(StepSRange.getSignedMaxFP(),
+                                                     StartSRange, MaxBEFP));
+    if (StartSRange.getCanBeNaN() || StepSRange.getCanBeNaN())
+      return Res.unionWith(MaxBEFP.getNaN(MaxBEFP.getSemantics()));
+    return Res;
+  }
+  MaxBECount = getNoopOrZeroExtend(MaxBECount, Start->getType());
+  APInt MaxBECountValue = getUnsignedRangeMax(MaxBECount);
 
   // If Step can be both positive and negative, we need to find ranges for the
   // maximum absolute step values in both directions and union them.
@@ -6759,6 +6879,8 @@ const SCEV *ScalarEvolution::getExitCount(const Loop *L,
     return getBackedgeTakenInfo(L).getExact(ExitingBlock, this);
   case ConstantMaximum:
     return getBackedgeTakenInfo(L).getMax(ExitingBlock, this);
+  case ConstantMinimum:
+    return getBackedgeTakenInfo(L).getMin(ExitingBlock, this);
   };
   llvm_unreachable("Invalid ExitCountKind!");
 }
@@ -6776,6 +6898,8 @@ const SCEV *ScalarEvolution::getBackedgeTakenCount(const Loop *L,
     return getBackedgeTakenInfo(L).getExact(L, this);
   case ConstantMaximum:
     return getBackedgeTakenInfo(L).getMax(this);
+  case ConstantMinimum:
+    return getBackedgeTakenInfo(L).getMin(this);
   };
   llvm_unreachable("Invalid ExitCountKind!");
 }
@@ -7096,6 +7220,16 @@ ScalarEvolution::BackedgeTakenInfo::getMax(BasicBlock *ExitingBlock,
   return SE->getCouldNotCompute();
 }
 
+const SCEV *
+ScalarEvolution::BackedgeTakenInfo::getMin(BasicBlock *ExitingBlock,
+                                           ScalarEvolution *SE) const {
+  for (auto &ENT : ExitNotTaken)
+    if (ENT.ExitingBlock == ExitingBlock && ENT.hasAlwaysTruePredicate())
+      return ENT.MaxNotTaken;
+
+  return SE->getCouldNotCompute();
+}
+
 /// getMax - Get the max backedge taken count for the loop.
 const SCEV *
 ScalarEvolution::BackedgeTakenInfo::getMax(ScalarEvolution *SE) const {
@@ -7109,6 +7243,21 @@ ScalarEvolution::BackedgeTakenInfo::getMax(ScalarEvolution *SE) const {
   assert((isa<SCEVCouldNotCompute>(getMax()) || isa<SCEVConstant>(getMax())) &&
          "No point in having a non-constant max backedge taken count!");
   return getMax();
+}
+
+/// getMin - Get the max backedge taken count for the loop.
+const SCEV *
+ScalarEvolution::BackedgeTakenInfo::getMin(ScalarEvolution *SE) const {
+  auto PredicateNotAlwaysTrue = [](const ExitNotTakenInfo &ENT) {
+    return !ENT.hasAlwaysTruePredicate();
+  };
+
+  if (any_of(ExitNotTaken, PredicateNotAlwaysTrue) || !getMin())
+    return SE->getCouldNotCompute();
+
+  assert((isa<SCEVCouldNotCompute>(getMin()) || isa<SCEVConstant>(getMin())) &&
+         "No point in having a non-constant max backedge taken count!");
+  return getMin();
 }
 
 bool ScalarEvolution::BackedgeTakenInfo::isMaxOrZero(ScalarEvolution *SE) const {

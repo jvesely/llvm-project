@@ -615,6 +615,9 @@ public:
   const SCEV *getTruncateOrZeroExtend(const SCEV *V, Type *Ty,
                                       unsigned Depth = 0);
 
+  const SCEV *convertTypeZE(const SCEV *V, Type *Ty,
+                            unsigned Depth = 0);
+
   /// Return a SCEV corresponding to a conversion of the input value to the
   /// specified type.  If the type must be extended, it is sign extended.
   const SCEV *getTruncateOrSignExtend(const SCEV *V, Type *Ty,
@@ -731,6 +734,7 @@ public:
     Exact,
     /// A constant which provides an upper bound on the exact trip count.
     ConstantMaximum,
+    ConstantMinimum,
   };
 
   /// Return the number of times the backedge executes before the given exit
@@ -1288,6 +1292,7 @@ private:
     /// @{
     bool isComplete() const { return MaxAndComplete.getInt(); }
     const SCEV *getMax() const { return MaxAndComplete.getPointer(); }
+    const SCEV *getMin() const { return nullptr; }
     /// @}
 
   public:
@@ -1340,8 +1345,14 @@ private:
     /// Get the max backedge taken count for the loop.
     const SCEV *getMax(ScalarEvolution *SE) const;
 
+    /// Get the min backedge taken count for the loop.
+    const SCEV *getMin(ScalarEvolution *SE) const;
+
     /// Get the max backedge taken count for the particular loop exit.
     const SCEV *getMax(BasicBlock *ExitingBlock, ScalarEvolution *SE) const;
+
+    /// Get the min backedge taken count for the particular loop exit.
+    const SCEV *getMin(BasicBlock *ExitingBlock, ScalarEvolution *SE) const;
 
     /// Return true if the number of times this backedge is taken is either the
     /// value returned by getMax or zero.
