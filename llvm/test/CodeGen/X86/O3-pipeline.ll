@@ -25,6 +25,7 @@
 ; CHECK-NEXT:       Module Verifier
 ; CHECK-NEXT:       Natural Loop Information
 ; CHECK-NEXT:       Canonicalize natural loops
+; CHECK-NEXT:       Lazy Value Information Analysis
 ; CHECK-NEXT:       Scalar Evolution Analysis
 ; CHECK-NEXT:       Loop Pass Manager
 ; CHECK-NEXT:         Induction Variable Users

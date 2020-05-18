@@ -13,6 +13,7 @@
 ; CHECK-NEXT:      Module Verifier
 ; CHECK-NEXT:      Natural Loop Information
 ; CHECK-NEXT:      Canonicalize natural loops
+; CHECK-NEXT:      Lazy Value Information Analysis
 ; CHECK-NEXT:      Scalar Evolution Analysis
 ; CHECK-NEXT:      Loop Pass Manager
 ; CHECK-NEXT:        Induction Variable Users
@@ -39,6 +40,7 @@
 ; CHECK-NEXT:      Expand reduction intrinsics
 ; CHECK-NEXT:      Dominator Tree Construction
 ; CHECK-NEXT:      Natural Loop Information
+; CHECK-NEXT:      Lazy Value Information Analysis
 ; CHECK-NEXT:      Scalar Evolution Analysis
 ; CHECK-NEXT:      Basic Alias Analysis (stateless AA impl)
 ; CHECK-NEXT:      Function Alias Analysis Results
@@ -55,11 +57,13 @@
 ; CHECK-NEXT:      Merge internal globals
 ; CHECK-NEXT:      Dominator Tree Construction
 ; CHECK-NEXT:      Natural Loop Information
+; CHECK-NEXT:      Lazy Value Information Analysis
 ; CHECK-NEXT:      Scalar Evolution Analysis
 ; CHECK-NEXT:      Lazy Branch Probability Analysis
 ; CHECK-NEXT:      Lazy Block Frequency Analysis
 ; CHECK-NEXT:      Optimization Remark Emitter
 ; CHECK-NEXT:      Hardware Loop Insertion
+; CHECK-NEXT:      Lazy Value Information Analysis
 ; CHECK-NEXT:      Scalar Evolution Analysis
 ; CHECK-NEXT:      Loop Pass Manager
 ; CHECK-NEXT:        Transform predicated vector loops to use MVE tail predication

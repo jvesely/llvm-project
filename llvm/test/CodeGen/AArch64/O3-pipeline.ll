@@ -23,6 +23,7 @@
 ; CHECK-NEXT:       Lazy Branch Probability Analysis
 ; CHECK-NEXT:       Lazy Block Frequency Analysis
 ; CHECK-NEXT:       Optimization Remark Emitter
+; CHECK-NEXT:       Lazy Value Information Analysis
 ; CHECK-NEXT:       Scalar Evolution Analysis
 ; CHECK-NEXT:       Loop Data Prefetch
 ; CHECK-NEXT:       Falkor HW Prefetch Fix

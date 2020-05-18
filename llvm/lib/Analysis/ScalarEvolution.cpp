@@ -12375,6 +12375,7 @@ INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LazyValueInfoWrapperPass)
 INITIALIZE_PASS_END(ScalarEvolutionWrapperPass, "scalar-evolution",
                     "Scalar Evolution Analysis", false, true)
 
@@ -12412,6 +12413,7 @@ void ScalarEvolutionWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequiredTransitive<LoopInfoWrapperPass>();
   AU.addRequiredTransitive<DominatorTreeWrapperPass>();
   AU.addRequiredTransitive<TargetLibraryInfoWrapperPass>();
+  AU.addRequired<LazyValueInfoWrapperPass>();
 }
 
 const SCEVPredicate *ScalarEvolution::getEqualPredicate(const SCEV *LHS,
