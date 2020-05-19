@@ -26,6 +26,7 @@ protected:
   std::unique_ptr<AAResults> AARes;
   std::unique_ptr<BasicAAResult> BasicAA;
   std::unique_ptr<LoopAccessInfo> LAI;
+  std::unique_ptr<LazyValueInfo> LVI;
   std::unique_ptr<PredicatedScalarEvolution> PSE;
   std::unique_ptr<InterleavedAccessInfo> IAI;
 
@@ -38,7 +39,8 @@ protected:
   VPInterleavedAccessInfo getInterleavedAccessInfo(Function &F, Loop *L,
                                                    VPlan &Plan) {
     AC.reset(new AssumptionCache(F));
-    SE.reset(new ScalarEvolution(F, TLI, *AC, *DT, *LI));
+    LVI.reset(new LazyValueInfo(&*AC, &DL, &TLI, &*DT));
+    SE.reset(new ScalarEvolution(F, TLI, *AC, *DT, *LI, *LVI));
     BasicAA.reset(new BasicAAResult(DL, F, TLI, *AC, &*DT, &*LI));
     AARes.reset(new AAResults(TLI));
     AARes->addAAResult(*BasicAA);

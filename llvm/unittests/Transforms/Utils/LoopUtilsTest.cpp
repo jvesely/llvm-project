@@ -31,7 +31,8 @@ static void run(Module &M, StringRef FuncName,
   TargetLibraryInfo TLI(TLII);
   AssumptionCache AC(*F);
   LoopInfo LI(DT);
-  ScalarEvolution SE(*F, TLI, AC, DT, LI);
+  LazyValueInfo LVI(&AC, &M.getDataLayout(), &TLI, &DT);
+  ScalarEvolution SE(*F, TLI, AC, DT, LI, LVI);
   Test(*F, DT, SE, LI);
 }
 

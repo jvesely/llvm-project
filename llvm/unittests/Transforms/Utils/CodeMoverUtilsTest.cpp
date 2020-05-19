@@ -40,7 +40,8 @@ static void run(Module &M, StringRef FuncName,
   AssumptionCache AC(*F);
   AliasAnalysis AA(TLI);
   LoopInfo LI(DT);
-  ScalarEvolution SE(*F, TLI, AC, DT, LI);
+  LazyValueInfo LVI(&AC, &M.getDataLayout(), &TLI, &DT);
+  ScalarEvolution SE(*F, TLI, AC, DT, LI, LVI);
   DependenceInfo DI(F, &AA, &SE, &LI);
   Test(*F, DT, PDT, DI);
 }

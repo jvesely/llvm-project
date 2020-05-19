@@ -76,12 +76,13 @@ TEST(LICMTest, TestSCEVInvalidationOnHoisting) {
   Instruction *IAfter = EntryBB.getFirstNonPHI();
   // Make sure the right instruction was selected.
   ASSERT_TRUE(isa<LoadInst>(IAfter));
+  ScalarEvolution &SEAfter = FAM.getResult<ScalarEvolutionAnalysis>(*F);
 
   ScalarEvolution::BlockDisposition DispositionBeforeInvalidation =
-      SE.getBlockDisposition(SE.getSCEV(IAfter), LoopBB);
-  SE.forgetValue(IAfter);
+      SEAfter.getBlockDisposition(SEAfter.getSCEV(IAfter), LoopBB);
+  SEAfter.forgetValue(IAfter);
   ScalarEvolution::BlockDisposition DispositionAfterInvalidation =
-      SE.getBlockDisposition(SE.getSCEV(IAfter), LoopBB);
+      SEAfter.getBlockDisposition(SEAfter.getSCEV(IAfter), LoopBB);
 
   // If LICM have properly invalidated SCEV,
   //   1. SCEV of <load i64, i64* %ptr> should properly dominate the "loop" BB,

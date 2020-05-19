@@ -64,7 +64,8 @@ while.end:                                        ; preds = %while.cond
   AssumptionCache AC(*F);
   TargetLibraryInfoImpl TLII;
   TargetLibraryInfo TLI(TLII);
-  ScalarEvolution SE(*F, TLI, AC, DT, LI);
+  LazyValueInfo LVI(&AC, &M->getDataLayout(), &TLI, &DT);
+  ScalarEvolution SE(*F, TLI, AC, DT, LI, LVI);
 
   Loop *L = *LI.begin();
 

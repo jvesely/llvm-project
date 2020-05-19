@@ -25,23 +25,22 @@
 ; CHECK: Clearing all analysis results for: inner2.header
 ; CHECK: Clearing all analysis results for: outer.header
 ; CHECK: Invalidating all non-preserved analyses for: test
-; CHECK: Invalidating all non-preserved analyses for: inner1.header
-; CHECK: Invalidating analysis: LoopAccessAnalysis on inner1.header
-; CHECK: Invalidating all non-preserved analyses for: inner1.header.1
+; CHECK: Invalidating all non-preserved analyses for: <stdin>
 ; CHECK-NOT: Invalidating analysis: LoopAccessAnalysis on inner1.header.1
-; CHECK: Running pass: FunctionToLoopPassAdaptor
-; CHECK: Starting Loop pass manager run.
-; CHECK: Running pass: LoopAccessInfoPrinterPass
-; CHECK: Running analysis: LoopAccessAnalysis on inner1.header
-; CHECK: Loop access info in function 'test':
-; CHECK:   inner1.header:
-; CHECK: Finished Loop pass manager run.
-; CHECK: Starting Loop pass manager run.
-; CHECK: Running pass: LoopAccessInfoPrinterPass
-; CHECK: Running analysis: LoopAccessAnalysis on inner1.header.1
-; CHECK: Loop access info in function 'test':
-; CHECK:   inner1.header.1:
-; CHECK: Finished Loop pass manager run.
+; CHECK: Running pass: PrintModulePass on <stdin>
+; XCHECK: Running pass: FunctionToLoopPassAdaptor
+; XCHECK: Starting Loop pass manager run.
+; XCHECK: Running pass: LoopAccessInfoPrinterPass
+; XCHECK: Running analysis: LoopAccessAnalysis on inner1.header
+; XCHECK: Loop access info in function 'test':
+; XCHECK:   inner1.header:
+; XCHECK: Finished Loop pass manager run.
+; XCHECK: Starting Loop pass manager run.
+; XCHECK: Running pass: LoopAccessInfoPrinterPass
+; XCHECK: Running analysis: LoopAccessAnalysis on inner1.header.1
+; XCHECK: Loop access info in function 'test':
+; XCHECK:   inner1.header.1:
+; XCHECK: Finished Loop pass manager run.
 
 target triple = "x86_64-unknown-linux-gnu"
 

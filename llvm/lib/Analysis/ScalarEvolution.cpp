@@ -5701,7 +5701,8 @@ static Optional<ConstantRange> GetRangeFromMetadata(Value *V) {
 /// with a "cleaner" unsigned (resp. signed) representation.
 const ConstantRange &
 ScalarEvolution::getRangeRef(const SCEV *S,
-                             ScalarEvolution::RangeSignHint SignHint) {
+                             ScalarEvolution::RangeSignHint SignHint,
+                             const Loop *L) {
   DenseMap<const SCEV *, ConstantRange> &Cache =
       SignHint == ScalarEvolution::HINT_RANGE_UNSIGNED ? UnsignedRanges
                                                        : SignedRanges;
@@ -5740,7 +5741,7 @@ ScalarEvolution::getRangeRef(const SCEV *S,
   }
 
   if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(S)) {
-    ConstantRange X = getRangeRef(Add->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(Add->getOperand(0), SignHint, L);
     unsigned WrapType = OBO::AnyWrap;
     if (Add->hasNoSignedWrap())
       WrapType |= OBO::NoSignedWrap;
@@ -5748,80 +5749,80 @@ ScalarEvolution::getRangeRef(const SCEV *S,
       WrapType |= OBO::NoUnsignedWrap;
     for (unsigned i = 1, e = Add->getNumOperands(); i != e; ++i)
       if (Add->getType()->isFloatingPointTy())
-        X = X.fadd(getRangeRef(Add->getOperand(i), SignHint));
+        X = X.fadd(getRangeRef(Add->getOperand(i), SignHint, L));
       else
-        X = X.addWithNoWrap(getRangeRef(Add->getOperand(i), SignHint),
+        X = X.addWithNoWrap(getRangeRef(Add->getOperand(i), SignHint, L),
                             WrapType, RangeType);
     return setRange(Add, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
 
   if (const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(S)) {
-    ConstantRange X = getRangeRef(Mul->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(Mul->getOperand(0), SignHint, L);
     for (unsigned i = 1, e = Mul->getNumOperands(); i != e; ++i)
       if (Mul->getType()->isFloatingPointTy())
-        X = X.fmultiply(getRangeRef(Mul->getOperand(i), SignHint));
+        X = X.fmultiply(getRangeRef(Mul->getOperand(i), SignHint, L));
       else
-        X = X.multiply(getRangeRef(Mul->getOperand(i), SignHint));
+        X = X.multiply(getRangeRef(Mul->getOperand(i), SignHint, L));
     return setRange(Mul, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
 
   if (const SCEVSMaxExpr *SMax = dyn_cast<SCEVSMaxExpr>(S)) {
-    ConstantRange X = getRangeRef(SMax->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(SMax->getOperand(0), SignHint, L);
     for (unsigned i = 1, e = SMax->getNumOperands(); i != e; ++i)
-      X = X.smax(getRangeRef(SMax->getOperand(i), SignHint));
+      X = X.smax(getRangeRef(SMax->getOperand(i), SignHint, L));
     return setRange(SMax, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
 
   if (const SCEVUMaxExpr *UMax = dyn_cast<SCEVUMaxExpr>(S)) {
-    ConstantRange X = getRangeRef(UMax->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(UMax->getOperand(0), SignHint, L);
     for (unsigned i = 1, e = UMax->getNumOperands(); i != e; ++i)
-      X = X.umax(getRangeRef(UMax->getOperand(i), SignHint));
+      X = X.umax(getRangeRef(UMax->getOperand(i), SignHint, L));
     return setRange(UMax, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
 
   if (const SCEVSMinExpr *SMin = dyn_cast<SCEVSMinExpr>(S)) {
-    ConstantRange X = getRangeRef(SMin->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(SMin->getOperand(0), SignHint, L);
     for (unsigned i = 1, e = SMin->getNumOperands(); i != e; ++i)
-      X = X.smin(getRangeRef(SMin->getOperand(i), SignHint));
+      X = X.smin(getRangeRef(SMin->getOperand(i), SignHint, L));
     return setRange(SMin, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
 
   if (const SCEVUMinExpr *UMin = dyn_cast<SCEVUMinExpr>(S)) {
-    ConstantRange X = getRangeRef(UMin->getOperand(0), SignHint);
+    ConstantRange X = getRangeRef(UMin->getOperand(0), SignHint, L);
     for (unsigned i = 1, e = UMin->getNumOperands(); i != e; ++i)
-      X = X.umin(getRangeRef(UMin->getOperand(i), SignHint));
+      X = X.umin(getRangeRef(UMin->getOperand(i), SignHint, L));
     return setRange(UMin, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
 
   if (const SCEVUDivExpr *UDiv = dyn_cast<SCEVUDivExpr>(S)) {
-    ConstantRange X = getRangeRef(UDiv->getLHS(), SignHint);
-    ConstantRange Y = getRangeRef(UDiv->getRHS(), SignHint);
+    ConstantRange X = getRangeRef(UDiv->getLHS(), SignHint, L);
+    ConstantRange Y = getRangeRef(UDiv->getRHS(), SignHint, L);
     return setRange(UDiv, SignHint,
                     ConservativeResult.intersectWith(X.udiv(Y), RangeType));
   }
 
   if (const SCEVZeroExtendExpr *ZExt = dyn_cast<SCEVZeroExtendExpr>(S)) {
-    ConstantRange X = getRangeRef(ZExt->getOperand(), SignHint);
+    ConstantRange X = getRangeRef(ZExt->getOperand(), SignHint, L);
     return setRange(ZExt, SignHint,
                     ConservativeResult.intersectWith(X.zeroExtend(BitWidth),
                                                      RangeType));
   }
 
   if (const SCEVSignExtendExpr *SExt = dyn_cast<SCEVSignExtendExpr>(S)) {
-    ConstantRange X = getRangeRef(SExt->getOperand(), SignHint);
+    ConstantRange X = getRangeRef(SExt->getOperand(), SignHint, L);
     return setRange(SExt, SignHint,
                     ConservativeResult.intersectWith(X.signExtend(BitWidth),
                                                      RangeType));
   }
 
   if (const SCEVTruncateExpr *Trunc = dyn_cast<SCEVTruncateExpr>(S)) {
-    ConstantRange X = getRangeRef(Trunc->getOperand(), SignHint);
+    ConstantRange X = getRangeRef(Trunc->getOperand(), SignHint, L);
     return setRange(Trunc, SignHint,
                     ConservativeResult.intersectWith(X.truncate(BitWidth),
                                                      RangeType));
@@ -5871,7 +5872,7 @@ ScalarEvolution::getRangeRef(const SCEV *S,
           getTypeSizeInBits(MaxBECount->getType()) <= BitWidth) {
         auto RangeFromAffine = getRangeForAffineAR(
             AddRec->getStart(), AddRec->getStepRecurrence(*this), MaxBECount,
-            BitWidth);
+            BitWidth, AddRec->getLoop());
         if (!RangeFromAffine.isFullSet())
           ConservativeResult =
               ConservativeResult.intersectWith(RangeFromAffine, RangeType);
@@ -5930,6 +5931,20 @@ ScalarEvolution::getRangeRef(const SCEV *S,
             RangeType);
     }
 
+    if (S->getType()->isFloatingPointTy() && L) {
+      ConstantRange LVIRange = LVI.getConstantRange(U->getValue(), L->getHeader());
+      // FIXMEE: This is a really stupid way to check predecessors.
+      auto I = dyn_cast<Instruction>(U->getValue());
+      for (auto &BB: *L->getHeader()->getParent()) {
+        if (DT.properlyDominates(&BB, L->getHeader()) &&
+            (!I || DT.dominates(I, &BB))) {
+
+          LVIRange = LVIRange.intersectWith(LVI.getConstantRange(U->getValue(), &BB));
+        }
+      }
+      ConservativeResult = ConservativeResult.intersectWith(LVIRange);
+    }
+
     // A range of Phi is a subset of union of all ranges of its input.
     if (const PHINode *Phi = dyn_cast<PHINode>(U->getValue())) {
       // Make sure that we do not run over cycled Phis.
@@ -5938,7 +5953,7 @@ ScalarEvolution::getRangeRef(const SCEV *S,
             ConstantRange::getEmpty(Phi->getType()->getFltSemantics()):
             ConstantRange::getEmpty(BitWidth);
         for (auto &Op : Phi->operands()) {
-          auto OpRange = getRangeRef(getSCEV(Op), SignHint);
+          auto OpRange = getRangeRef(getSCEV(Op), SignHint, L);
           RangeFromOps = RangeFromOps.unionWith(OpRange);
           // No point to continue if we already have a full set.
           if (RangeFromOps.isFullSet())
@@ -6066,14 +6081,15 @@ static ConstantRange getRangeForAffineARHelperFP(APFloat Step,
 ConstantRange ScalarEvolution::getRangeForAffineAR(const SCEV *Start,
                                                    const SCEV *Step,
                                                    const SCEV *MaxBECount,
-                                                   unsigned BitWidth) {
+                                                   unsigned BitWidth,
+                                                   const Loop *L) {
   assert(!isa<SCEVCouldNotCompute>(MaxBECount) &&
          getTypeSizeInBits(MaxBECount->getType()) <= BitWidth &&
          "Precondition!");
 
   // First, consider step signed.
-  ConstantRange StartSRange = getSignedRange(Start);
-  ConstantRange StepSRange = getSignedRange(Step);
+  ConstantRange StartSRange = getSignedRange(Start, L);
+  ConstantRange StepSRange = getSignedRange(Step, L);
 
   if (Start->getType()->isFloatingPointTy()) {
     APInt MaxBECountValue = getUnsignedRangeMax(MaxBECount);
@@ -11740,8 +11756,8 @@ ScalarEvolution::SCEVCallbackVH::SCEVCallbackVH(Value *V, ScalarEvolution *se)
 
 ScalarEvolution::ScalarEvolution(Function &F, TargetLibraryInfo &TLI,
                                  AssumptionCache &AC, DominatorTree &DT,
-                                 LoopInfo &LI)
-    : F(F), TLI(TLI), AC(AC), DT(DT), LI(LI),
+                                 LoopInfo &LI, LazyValueInfo &LVI)
+    : F(F), TLI(TLI), AC(AC), DT(DT), LI(LI), LVI(LVI),
       CouldNotCompute(new SCEVCouldNotCompute()), ValuesAtScopes(64),
       LoopDispositions(64), BlockDispositions(64) {
   // To use guards for proving predicates, we need to scan every instruction in
@@ -11761,7 +11777,7 @@ ScalarEvolution::ScalarEvolution(Function &F, TargetLibraryInfo &TLI,
 
 ScalarEvolution::ScalarEvolution(ScalarEvolution &&Arg)
     : F(Arg.F), HasGuards(Arg.HasGuards), TLI(Arg.TLI), AC(Arg.AC), DT(Arg.DT),
-      LI(Arg.LI), CouldNotCompute(std::move(Arg.CouldNotCompute)),
+      LI(Arg.LI), LVI(Arg.LVI), CouldNotCompute(std::move(Arg.CouldNotCompute)),
       ValueExprMap(std::move(Arg.ValueExprMap)),
       PendingLoopPredicates(std::move(Arg.PendingLoopPredicates)),
       PendingPhiRanges(std::move(Arg.PendingPhiRanges)),
@@ -12264,7 +12280,7 @@ void ScalarEvolution::addToLoopUseLists(const SCEV *S) {
 
 void ScalarEvolution::verify() const {
   ScalarEvolution &SE = *const_cast<ScalarEvolution *>(this);
-  ScalarEvolution SE2(F, TLI, AC, DT, LI);
+  ScalarEvolution SE2(F, TLI, AC, DT, LI, LVI);
 
   SmallVector<Loop *, 8> LoopStack(LI.begin(), LI.end());
 
@@ -12344,7 +12360,8 @@ bool ScalarEvolution::invalidate(
   return !(PAC.preserved() || PAC.preservedSet<AllAnalysesOn<Function>>()) ||
          Inv.invalidate<AssumptionAnalysis>(F, PA) ||
          Inv.invalidate<DominatorTreeAnalysis>(F, PA) ||
-         Inv.invalidate<LoopAnalysis>(F, PA);
+         Inv.invalidate<LoopAnalysis>(F, PA) ||
+         Inv.invalidate<LazyValueAnalysis>(F, PA);
 }
 
 AnalysisKey ScalarEvolutionAnalysis::Key;
@@ -12354,7 +12371,8 @@ ScalarEvolution ScalarEvolutionAnalysis::run(Function &F,
   return ScalarEvolution(F, AM.getResult<TargetLibraryAnalysis>(F),
                          AM.getResult<AssumptionAnalysis>(F),
                          AM.getResult<DominatorTreeAnalysis>(F),
-                         AM.getResult<LoopAnalysis>(F));
+                         AM.getResult<LoopAnalysis>(F),
+                         AM.getResult<LazyValueAnalysis>(F));
 }
 
 PreservedAnalyses
@@ -12390,7 +12408,8 @@ bool ScalarEvolutionWrapperPass::runOnFunction(Function &F) {
       F, getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F),
       getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F),
       getAnalysis<DominatorTreeWrapperPass>().getDomTree(),
-      getAnalysis<LoopInfoWrapperPass>().getLoopInfo()));
+      getAnalysis<LoopInfoWrapperPass>().getLoopInfo(),
+      getAnalysis<LazyValueInfoWrapperPass>().getLVI()));
   return false;
 }
 

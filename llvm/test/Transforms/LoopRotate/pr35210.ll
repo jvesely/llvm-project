@@ -19,6 +19,7 @@
 ; CHECK-NEXT: Running analysis: AAManager on f
 ; CHECK-NEXT: Running analysis: TargetLibraryAnalysis on f
 ; CHECK-NEXT: Running analysis: ScalarEvolutionAnalysis on f
+; CHECK-NEXT: Running analysis: LazyValueAnalysis on f
 ; CHECK-NEXT: Running analysis: TargetIRAnalysis on f
 ; CHECK-NEXT: Running analysis: InnerAnalysisManagerProxy{{.*}} on f
 ; CHECK-NEXT: Starting Loop pass manager run.
@@ -28,7 +29,11 @@
 ; CHECK-NEXT: Invalidating all non-preserved analyses for: bb
 ; CHECK-NEXT: Finished Loop pass manager run.
 ; CHECK-NEXT: Invalidating all non-preserved analyses for: f
+; CHECK-NEXT: Clearing all analysis results for: <possibly invalidated loop>
 ; CHECK-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on f
+; CHECK-NEXT: Invalidating analysis: LazyValueAnalysis on f
+; CHECK-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on f
+; CHECK-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<llvm::AnalysisManager<llvm::Loop, llvm::LoopStandardAnalysisResults&>, llvm::Function> on f
 ; CHECK-NEXT: Running pass: ADCEPass on f
 ; CHECK-NEXT: Running analysis: PostDominatorTreeAnalysis on f
 ; CHECK-NEXT: Finished llvm::Function pass manager run.
@@ -48,6 +53,7 @@
 ; MSSA-NEXT: Running analysis: AAManager on f
 ; MSSA-NEXT: Running analysis: TargetLibraryAnalysis on f
 ; MSSA-NEXT: Running analysis: ScalarEvolutionAnalysis on f
+; MSSA-NEXT: Running analysis: LazyValueAnalysis on f
 ; MSSA-NEXT: Running analysis: TargetIRAnalysis on f
 ; MSSA-NEXT: Running analysis: InnerAnalysisManagerProxy{{.*}} on f
 ; MSSA-NEXT: Starting Loop pass manager run.
@@ -57,7 +63,11 @@
 ; MSSA-NEXT: Invalidating all non-preserved analyses for: bb
 ; MSSA-NEXT: Finished Loop pass manager run.
 ; MSSA-NEXT: Invalidating all non-preserved analyses for: f
+; MSSA-NEXT: Clearing all analysis results for: <possibly invalidated loop>
 ; MSSA-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on f
+; MSSA-NEXT: Invalidating analysis: LazyValueAnalysis on f
+; MSSA-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on f
+; MSSA-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<llvm::AnalysisManager<llvm::Loop, llvm::LoopStandardAnalysisResults&>, llvm::Function> on f
 ; MSSA-NEXT: Running pass: ADCEPass on f
 ; MSSA-NEXT: Running analysis: PostDominatorTreeAnalysis on f
 ; MSSA-NEXT: Finished llvm::Function pass manager run.

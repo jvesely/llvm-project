@@ -39,6 +39,7 @@ protected:
   std::unique_ptr<AssumptionCache> AC;
   std::unique_ptr<DominatorTree> DT;
   std::unique_ptr<LoopInfo> LI;
+  std::unique_ptr<LazyValueInfo> LVI;
 
   ScalarEvolutionsTest() : M("", Context), TLII(), TLI(TLII) {}
 
@@ -46,7 +47,8 @@ protected:
     AC.reset(new AssumptionCache(F));
     DT.reset(new DominatorTree(F));
     LI.reset(new LoopInfo(*DT));
-    return ScalarEvolution(F, TLI, *AC, *DT, *LI);
+    LVI.reset(new LazyValueInfo(&*AC, &M.getDataLayout(), &TLI, &*DT));
+    return ScalarEvolution(F, TLI, *AC, *DT, *LI, *LVI);
   }
 
   void runWithSE(

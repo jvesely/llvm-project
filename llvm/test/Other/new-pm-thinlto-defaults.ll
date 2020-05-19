@@ -133,6 +133,7 @@
 ; CHECK-O-NEXT: Running pass: LCSSAPass
 ; CHECK-O-NEXT: Finished llvm::Function pass manager run
 ; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-O1-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy
 ; CHECK-O-NEXT: Starting Loop pass manager run.
 ; CHECK-O-NEXT: Running analysis: PassInstrumentationAnalysis

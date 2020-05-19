@@ -70,6 +70,7 @@ define void @one_loop(i1* %ptr) {
 ; CHECK-LOOP-INV-NEXT: Running analysis: AAManager
 ; CHECK-LOOP-INV-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-LOOP-INV-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-LOOP-INV-NEXT: Starting {{.*}}Loop pass manager run.
@@ -107,6 +108,7 @@ define void @one_loop(i1* %ptr) {
 ; CHECK-SCEV-INV-NEXT: Running analysis: AAManager
 ; CHECK-SCEV-INV-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-SCEV-INV-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-SCEV-INV-NEXT: Starting {{.*}}Loop pass manager run.
@@ -154,6 +156,7 @@ define void @nested_loops(i1* %ptr) {
 ; CHECK-LOOP-INV-NEXT: Running analysis: AAManager
 ; CHECK-LOOP-INV-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-LOOP-INV-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-LOOP-INV-NEXT: Starting {{.*}}Loop pass manager run.
@@ -200,6 +203,7 @@ define void @nested_loops(i1* %ptr) {
 ; CHECK-SCEV-INV-NEXT: Running analysis: AAManager
 ; CHECK-SCEV-INV-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-SCEV-INV-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-SCEV-INV-NEXT: Starting {{.*}}Loop pass manager run.
@@ -263,6 +267,7 @@ define void @dead_loop() {
 ; CHECK-LOOP-INV-NEXT: Running analysis: AAManager
 ; CHECK-LOOP-INV-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-LOOP-INV-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-LOOP-INV-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-LOOP-INV-NEXT: Starting {{.*}}Loop pass manager run.
@@ -300,6 +305,7 @@ define void @dead_loop() {
 ; CHECK-SCEV-INV-NEXT: Running analysis: AAManager
 ; CHECK-SCEV-INV-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-SCEV-INV-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-SCEV-INV-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-SCEV-INV-NEXT: Starting {{.*}}Loop pass manager run.
@@ -335,6 +341,7 @@ define void @dead_loop() {
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running analysis: AAManager
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running analysis: ScalarEvolutionAnalysis
+; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running analysis: LazyValueAnalysis
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Starting {{.*}}Loop pass manager run.
@@ -344,10 +351,11 @@ define void @dead_loop() {
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Clearing all analysis results for:
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Finished {{.*}}Loop pass manager run.
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Invalidating all non-preserved analyses
-; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running pass: InvalidateAnalysisPass<{{.*}}ScalarEvolutionAnalysis
-; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Invalidating all non-preserved analyses
+; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Invalidating analysis: LazyValueAnalysis
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Invalidating analysis: ScalarEvolutionAnalysis
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Loop
+; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running pass: InvalidateAnalysisPass<{{.*}}ScalarEvolutionAnalysis
+; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Invalidating all non-preserved analyses
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running pass: FunctionToLoopPassAdaptor<{{.*}}> on dead_loop
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Starting {{.*}}Function pass manager run
 ; CHECK-SCEV-INV-AFTER-DELETE-NEXT: Running pass: LoopSimplifyPass

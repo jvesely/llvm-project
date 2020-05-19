@@ -875,6 +875,7 @@ public:
     auto *DL = &F.getParent()->getDataLayout();
     auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
     auto &ACT = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
+    auto &LVI = getAnalysis<LazyValueInfoWrapperPass>().getLVI();
 
     // Compute DT and LI only for functions that have the attribute.
     // This is only useful because the legacy pass manager doesn't let us
@@ -885,7 +886,7 @@ public:
     DominatorTree DT(F);
     LoopInfo LI(DT);
 
-    ScalarEvolution SE(F, TLI, ACT, DT, LI);
+    ScalarEvolution SE(F, TLI, ACT, DT, LI, LVI);
 
     return SafeStack(F, *TL, *DL, SE).run();
   }

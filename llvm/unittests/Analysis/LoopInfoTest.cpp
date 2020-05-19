@@ -41,7 +41,8 @@ static void runWithLoopInfoPlus(
   AssumptionCache AC(*F);
   DominatorTree DT(*F);
   LoopInfo LI(DT);
-  ScalarEvolution SE(*F, TLI, AC, DT, LI);
+  LazyValueInfo LVI(&AC, &M.getDataLayout(), &TLI, &DT);
+  ScalarEvolution SE(*F, TLI, AC, DT, LI, LVI);
   Test(*F, LI, SE);
 }
 

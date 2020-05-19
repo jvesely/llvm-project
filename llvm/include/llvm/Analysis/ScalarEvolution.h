@@ -473,7 +473,7 @@ public:
   }
 
   ScalarEvolution(Function &F, TargetLibraryInfo &TLI, AssumptionCache &AC,
-                  DominatorTree &DT, LoopInfo &LI);
+                  DominatorTree &DT, LoopInfo &LI, LazyValueInfo &LVI);
   ScalarEvolution(ScalarEvolution &&Arg);
   ~ScalarEvolution();
 
@@ -837,8 +837,8 @@ public:
 
   /// Determine the signed range for a particular SCEV.
   /// NOTE: This returns a copy of the reference returned by getRangeRef.
-  ConstantRange getSignedRange(const SCEV *S) {
-    return getRangeRef(S, HINT_RANGE_SIGNED);
+  ConstantRange getSignedRange(const SCEV *S, const Loop *L=nullptr) {
+    return getRangeRef(S, HINT_RANGE_SIGNED, L);
   }
 
   /// Determine the min of the signed range for a particular SCEV.
@@ -1130,6 +1130,9 @@ private:
 
   /// The loop information for the function we are currently analyzing.
   LoopInfo &LI;
+
+  /// The lazy value info for the function we are currently analyzing.
+  LazyValueInfo &LVI;
 
   /// This SCEV is used to represent unknown trip counts and things.
   std::unique_ptr<SCEVCouldNotCompute> CouldNotCompute;
@@ -1455,12 +1458,13 @@ private:
   /// Determine the range for a particular SCEV.
   /// NOTE: This returns a reference to an entry in a cache. It must be
   /// copied if its needed for longer.
-  const ConstantRange &getRangeRef(const SCEV *S, RangeSignHint Hint);
+  const ConstantRange &getRangeRef(const SCEV *S, RangeSignHint Hint, const Loop *L=nullptr);
 
   /// Determines the range for the affine SCEVAddRecExpr {\p Start,+,\p Stop}.
   /// Helper for \c getRange.
   ConstantRange getRangeForAffineAR(const SCEV *Start, const SCEV *Stop,
-                                    const SCEV *MaxBECount, unsigned BitWidth);
+                                    const SCEV *MaxBECount, unsigned BitWidth,
+                                    const Loop *L=nullptr);
 
   /// Try to compute a range for the affine SCEVAddRecExpr {\p Start,+,\p
   /// Stop} by "factoring out" a ternary expression from the add recurrence.
