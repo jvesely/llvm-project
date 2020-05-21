@@ -5931,20 +5931,6 @@ ScalarEvolution::getRangeRef(const SCEV *S,
             RangeType);
     }
 
-    if (S->getType()->isFloatingPointTy() && L) {
-      ConstantRange LVIRange = LVI.getConstantRange(U->getValue(), L->getHeader());
-      // FIXMEE: This is a really stupid way to check predecessors.
-      auto I = dyn_cast<Instruction>(U->getValue());
-      for (auto &BB: *L->getHeader()->getParent()) {
-        if (DT.properlyDominates(&BB, L->getHeader()) &&
-            (!I || DT.dominates(I, &BB))) {
-
-          LVIRange = LVIRange.intersectWith(LVI.getConstantRange(U->getValue(), &BB));
-        }
-      }
-      ConservativeResult = ConservativeResult.intersectWith(LVIRange);
-    }
-
     // A range of Phi is a subset of union of all ranges of its input.
     if (const PHINode *Phi = dyn_cast<PHINode>(U->getValue())) {
       // Make sure that we do not run over cycled Phis.
@@ -5966,6 +5952,21 @@ ScalarEvolution::getRangeRef(const SCEV *S,
         (void) Erased;
       }
     }
+
+    if (L && S->getType()->isFloatingPointTy() ) {
+      ConstantRange LVIRange = LVI.getConstantRange(U->getValue(), L->getHeader());
+      // FIXMEE: This is a really stupid way to check predecessors.
+      auto I = dyn_cast<Instruction>(U->getValue());
+      for (auto &BB: *L->getHeader()->getParent()) {
+        if (DT.properlyDominates(&BB, L->getHeader()) &&
+            (!I || DT.dominates(I, &BB))) {
+
+          LVIRange = LVIRange.intersectWith(LVI.getConstantRange(U->getValue(), &BB));
+        }
+      }
+      ConservativeResult = ConservativeResult.intersectWith(LVIRange);
+    }
+
 
     return setRange(U, SignHint, std::move(ConservativeResult));
   }
@@ -7272,7 +7273,7 @@ ScalarEvolution::BackedgeTakenInfo::getMin(ScalarEvolution *SE) const {
     return SE->getCouldNotCompute();
 
   assert((isa<SCEVCouldNotCompute>(getMin()) || isa<SCEVConstant>(getMin())) &&
-         "No point in having a non-constant max backedge taken count!");
+         "No point in having a non-constant min backedge taken count!");
   return getMin();
 }
 
