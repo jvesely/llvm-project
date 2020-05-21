@@ -17,6 +17,7 @@ target triple = "x86_64-unknown-linux-gnu"
 ; CHECK-NEXT: Determining loop execution counts for: @f0
 ; CHECK-NEXT: Loop %b1: backedge-taken count is 1
 ; CHECK-NEXT: Loop %b1: max backedge-taken count is 1
+; CHECK-NEXT: Loop %b1: min backedge-taken count is 1
 ; CHECK-NEXT: Loop %b1: Predicated backedge-taken count is 1
 ; CHECK-NEXT:  Predicates:
 ; CHECK-EMPTY:
@@ -63,9 +64,11 @@ b2:                                               ; preds = %b1
 ; CHECK-NEXT: Determining loop execution counts for: @f1
 ; CHECK-NEXT: Loop %b3: <multiple exits> Unpredictable backedge-taken count.
 ; CHECK-NEXT: Loop %b3: Unpredictable max backedge-taken count.
+; CHECK-NEXT: Loop %b3: Unpredictable min backedge-taken count.
 ; CHECK-NEXT: Loop %b3: Unpredictable predicated backedge-taken count.
 ; CHECK-NEXT: Loop %b1: backedge-taken count is 2
 ; CHECK-NEXT: Loop %b1: max backedge-taken count is 2
+; CHECK-NEXT: Loop %b1: min backedge-taken count is 2
 ; CHECK-NEXT: Loop %b1: Predicated backedge-taken count is 2
 ; CHECK-NEXT:  Predicates:
 ; CHECK-EMPTY:

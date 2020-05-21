@@ -21,6 +21,7 @@ bb1.i:                                            ; preds = %bb1.i, %bb2
 ; CHECK-LABEL: Determining loop execution counts for: @test_and
 ; CHECK-NEXT: Loop %bb1.i: backedge-taken count is (1 + (-1 * %in))
 ; CHECK-NEXT: Loop %bb1.i: max backedge-taken count is -1
+; CHECK-NEXT: Loop %bb1.i: min backedge-taken count is 0
 ; CHECK-NEXT: Loop %bb1.i: Predicated backedge-taken count is (1 + (-1 * %in))
 
 
@@ -46,4 +47,5 @@ exit:                                      ; preds = %BB, %0
 ; CHECK-LABEL: Determining loop execution counts for: @test_or
 ; CHECK-NEXT: Loop %BB: backedge-taken count is undef
 ; CHECK-NEXT: Loop %BB: max backedge-taken count is -1
+; CHECK-NEXT: Loop %BB: min backedge-taken count is 0
 ; CHECK-NEXT: Loop %BB: Predicated backedge-taken count is undef

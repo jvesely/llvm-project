@@ -774,6 +774,10 @@ public:
     return getBackedgeTakenCount(L, ConstantMaximum);
   } 
 
+  const SCEV *getConstantMinBackedgeTakenCount(const Loop *L) {
+    return getBackedgeTakenCount(L, ConstantMinimum);
+  }
+
   /// Return true if the backedge taken count is either the value returned by
   /// getConstantMaxBackedgeTakenCount or zero.
   bool isBackedgeTakenCountMaxOrZero(const Loop *L);
@@ -1209,6 +1213,7 @@ private:
   struct ExitLimit {
     const SCEV *ExactNotTaken; // The exit is not taken exactly this many times
     const SCEV *MaxNotTaken; // The exit is not taken at most this many times
+    const SCEV *MinNotTaken; // The exit is not taked at least this many times
 
     // Not taken either exactly MaxNotTaken or zero times
     bool MaxOrZero = false;
@@ -1229,18 +1234,19 @@ private:
     /*implicit*/ ExitLimit(const SCEV *E);
 
     ExitLimit(
-        const SCEV *E, const SCEV *M, bool MaxOrZero,
+        const SCEV *E, const SCEV *Max, const SCEV *Min, bool MaxOrZero,
         ArrayRef<const SmallPtrSetImpl<const SCEVPredicate *> *> PredSetList);
 
-    ExitLimit(const SCEV *E, const SCEV *M, bool MaxOrZero,
+    ExitLimit(const SCEV *E, const SCEV *Max, const SCEV *Min, bool MaxOrZero,
               const SmallPtrSetImpl<const SCEVPredicate *> &PredSet);
 
-    ExitLimit(const SCEV *E, const SCEV *M, bool MaxOrZero);
+    ExitLimit(const SCEV *E, const SCEV *Max, const SCEV *Min, bool MaxOrZero);
 
     /// Test whether this ExitLimit contains any computed information, or
     /// whether it's all SCEVCouldNotCompute values.
     bool hasAnyInfo() const {
       return !isa<SCEVCouldNotCompute>(ExactNotTaken) ||
+             !isa<SCEVCouldNotCompute>(MaxNotTaken) ||
              !isa<SCEVCouldNotCompute>(MaxNotTaken);
     }
 
@@ -1258,14 +1264,16 @@ private:
     PoisoningVH<BasicBlock> ExitingBlock;
     const SCEV *ExactNotTaken;
     const SCEV *MaxNotTaken;
+    const SCEV *MinNotTaken;
     std::unique_ptr<SCEVUnionPredicate> Predicate;
 
     explicit ExitNotTakenInfo(PoisoningVH<BasicBlock> ExitingBlock,
                               const SCEV *ExactNotTaken,
                               const SCEV *MaxNotTaken,
+                              const SCEV *MinNotTaken,
                               std::unique_ptr<SCEVUnionPredicate> Predicate)
       : ExitingBlock(ExitingBlock), ExactNotTaken(ExactNotTaken),
-        MaxNotTaken(MaxNotTaken), Predicate(std::move(Predicate)) {}
+        MaxNotTaken(MaxNotTaken), MinNotTaken(MinNotTaken), Predicate(std::move(Predicate)) {}
 
     bool hasAlwaysTruePredicate() const {
       return !Predicate || Predicate->isAlwaysTrue();
@@ -1288,6 +1296,7 @@ private:
     /// The integer part of \c MaxAndComplete is a boolean indicating if \c
     /// ExitNotTaken has an element for every exiting block in the loop.
     PointerIntPair<const SCEV *, 1> MaxAndComplete;
+    const SCEV *CompleteMin = nullptr;
 
     /// True iff the backedge is taken either exactly Max or zero times.
     bool MaxOrZero = false;
@@ -1296,7 +1305,7 @@ private:
     /// @{
     bool isComplete() const { return MaxAndComplete.getInt(); }
     const SCEV *getMax() const { return MaxAndComplete.getPointer(); }
-    const SCEV *getMin() const { return nullptr; }
+    const SCEV *getMin() const { return CompleteMin; }
     /// @}
 
   public:
@@ -1308,7 +1317,7 @@ private:
 
     /// Initialize BackedgeTakenInfo from a list of exact exit counts.
     BackedgeTakenInfo(ArrayRef<EdgeExitInfo> ExitCounts, bool Complete,
-                      const SCEV *MaxCount, bool MaxOrZero);
+                      const SCEV *MaxCount, const SCEV *MinCount, bool MaxOrZero);
 
     /// Test whether this BackedgeTakenInfo contains any computed information,
     /// or whether it's all SCEVCouldNotCompute values.

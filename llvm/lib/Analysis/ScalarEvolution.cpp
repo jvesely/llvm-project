@@ -7242,7 +7242,7 @@ ScalarEvolution::BackedgeTakenInfo::getMin(BasicBlock *ExitingBlock,
                                            ScalarEvolution *SE) const {
   for (auto &ENT : ExitNotTaken)
     if (ENT.ExitingBlock == ExitingBlock && ENT.hasAlwaysTruePredicate())
-      return ENT.MaxNotTaken;
+      return ENT.MinNotTaken;
 
   return SE->getCouldNotCompute();
 }
@@ -7299,42 +7299,54 @@ bool ScalarEvolution::BackedgeTakenInfo::hasOperand(const SCEV *S,
 }
 
 ScalarEvolution::ExitLimit::ExitLimit(const SCEV *E)
-    : ExactNotTaken(E), MaxNotTaken(E) {
+    : ExactNotTaken(E), MaxNotTaken(E), MinNotTaken(E) {
   assert((isa<SCEVCouldNotCompute>(MaxNotTaken) ||
           isa<SCEVConstant>(MaxNotTaken)) &&
          "No point in having a non-constant max backedge taken count!");
+  assert((isa<SCEVCouldNotCompute>(MinNotTaken) ||
+          isa<SCEVConstant>(MinNotTaken)) &&
+         "No point in having a non-constant min backedge taken count!");
 }
 
 ScalarEvolution::ExitLimit::ExitLimit(
-    const SCEV *E, const SCEV *M, bool MaxOrZero,
+    const SCEV *E, const SCEV *Max, const SCEV *Min, bool MaxOrZero,
     ArrayRef<const SmallPtrSetImpl<const SCEVPredicate *> *> PredSetList)
-    : ExactNotTaken(E), MaxNotTaken(M), MaxOrZero(MaxOrZero) {
+    : ExactNotTaken(E), MaxNotTaken(Max), MinNotTaken(Min), MaxOrZero(MaxOrZero) {
   assert((isa<SCEVCouldNotCompute>(ExactNotTaken) ||
           !isa<SCEVCouldNotCompute>(MaxNotTaken)) &&
          "Exact is not allowed to be less precise than Max");
   assert((isa<SCEVCouldNotCompute>(MaxNotTaken) ||
           isa<SCEVConstant>(MaxNotTaken)) &&
          "No point in having a non-constant max backedge taken count!");
+  assert((isa<SCEVCouldNotCompute>(MinNotTaken) ||
+          isa<SCEVConstant>(MinNotTaken)) &&
+         "No point in having a non-constant min backedge taken count!");
   for (auto *PredSet : PredSetList)
     for (auto *P : *PredSet)
       addPredicate(P);
 }
 
 ScalarEvolution::ExitLimit::ExitLimit(
-    const SCEV *E, const SCEV *M, bool MaxOrZero,
+    const SCEV *E, const SCEV *Max, const SCEV *Min, bool MaxOrZero,
     const SmallPtrSetImpl<const SCEVPredicate *> &PredSet)
-    : ExitLimit(E, M, MaxOrZero, {&PredSet}) {
+    : ExitLimit(E, Max, Min, MaxOrZero, {&PredSet}) {
   assert((isa<SCEVCouldNotCompute>(MaxNotTaken) ||
           isa<SCEVConstant>(MaxNotTaken)) &&
          "No point in having a non-constant max backedge taken count!");
+  assert((isa<SCEVCouldNotCompute>(MinNotTaken) ||
+          isa<SCEVConstant>(MinNotTaken)) &&
+         "No point in having a non-constant min backedge taken count!");
 }
 
-ScalarEvolution::ExitLimit::ExitLimit(const SCEV *E, const SCEV *M,
-                                      bool MaxOrZero)
-    : ExitLimit(E, M, MaxOrZero, None) {
+ScalarEvolution::ExitLimit::ExitLimit(const SCEV *E, const SCEV *Max,
+                                      const SCEV *Min, bool MaxOrZero)
+    : ExitLimit(E, Max, Min, MaxOrZero, None) {
   assert((isa<SCEVCouldNotCompute>(MaxNotTaken) ||
           isa<SCEVConstant>(MaxNotTaken)) &&
          "No point in having a non-constant max backedge taken count!");
+  assert((isa<SCEVCouldNotCompute>(MinNotTaken) ||
+          isa<SCEVConstant>(MinNotTaken)) &&
+         "No point in having a non-constant min backedge taken count!");
 }
 
 /// Allocate memory for BackedgeTakenInfo and copy the not-taken count of each
@@ -7342,8 +7354,8 @@ ScalarEvolution::ExitLimit::ExitLimit(const SCEV *E, const SCEV *M,
 ScalarEvolution::BackedgeTakenInfo::BackedgeTakenInfo(
     ArrayRef<ScalarEvolution::BackedgeTakenInfo::EdgeExitInfo>
         ExitCounts,
-    bool Complete, const SCEV *MaxCount, bool MaxOrZero)
-    : MaxAndComplete(MaxCount, Complete), MaxOrZero(MaxOrZero) {
+    bool Complete, const SCEV *MaxCount, const SCEV *MinCount, bool MaxOrZero)
+    : MaxAndComplete(MaxCount, Complete), CompleteMin(MinCount), MaxOrZero(MaxOrZero) {
   using EdgeExitInfo = ScalarEvolution::BackedgeTakenInfo::EdgeExitInfo;
 
   ExitNotTaken.reserve(ExitCounts.size());
@@ -7354,14 +7366,14 @@ ScalarEvolution::BackedgeTakenInfo::BackedgeTakenInfo(
         const ExitLimit &EL = EEI.second;
         if (EL.Predicates.empty())
           return ExitNotTakenInfo(ExitBB, EL.ExactNotTaken, EL.MaxNotTaken,
-                                  nullptr);
+                                  EL.MinNotTaken, nullptr);
 
         std::unique_ptr<SCEVUnionPredicate> Predicate(new SCEVUnionPredicate);
         for (auto *Pred : EL.Predicates)
           Predicate->add(Pred);
 
         return ExitNotTakenInfo(ExitBB, EL.ExactNotTaken, EL.MaxNotTaken,
-                                std::move(Predicate));
+                                EL.MinNotTaken, std::move(Predicate));
       });
   assert((isa<SCEVCouldNotCompute>(MaxCount) || isa<SCEVConstant>(MaxCount)) &&
          "No point in having a non-constant max backedge taken count!");
@@ -7386,6 +7398,7 @@ ScalarEvolution::computeBackedgeTakenCount(const Loop *L,
   BasicBlock *Latch = L->getLoopLatch(); // may be NULL.
   const SCEV *MustExitMaxBECount = nullptr;
   const SCEV *MayExitMaxBECount = nullptr;
+  const SCEV *MinBECount = nullptr;
   bool MustExitMaxOrZero = false;
 
   // Compute the ExitLimit for each loop exit. Use this to populate ExitCounts
@@ -7445,6 +7458,17 @@ ScalarEvolution::computeBackedgeTakenCount(const Loop *L,
             getUMaxFromMismatchedTypes(MayExitMaxBECount, EL.MaxNotTaken);
       }
     }
+
+    // If there's even one unknown exit, we can't say anything about minimum count
+    // FIXMEE: If computable min count is 0 we can use it despite other could not compute exits
+    if (!MinBECount) {
+      MinBECount = EL.MinNotTaken;
+    } else if (MinBECount != getCouldNotCompute() &&
+               EL.MinNotTaken != getCouldNotCompute()) {
+      MinBECount = getUMinFromMismatchedTypes(MinBECount, EL.MinNotTaken);
+    } else {
+      MinBECount = getCouldNotCompute();
+    }
   }
   const SCEV *MaxBECount = MustExitMaxBECount ? MustExitMaxBECount :
     (MayExitMaxBECount ? MayExitMaxBECount : getCouldNotCompute());
@@ -7452,7 +7476,7 @@ ScalarEvolution::computeBackedgeTakenCount(const Loop *L,
   // a single exit that must be taken the maximum or zero times.
   bool MaxOrZero = (MustExitMaxOrZero && ExitingBlocks.size() == 1);
   return BackedgeTakenInfo(std::move(ExitCounts), CouldComputeBECount,
-                           MaxBECount, MaxOrZero);
+                           MaxBECount, MinBECount, MaxOrZero);
 }
 
 ScalarEvolution::ExitLimit
@@ -7570,6 +7594,7 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
         return CI->isOne() ? EL1 : EL0;
       const SCEV *BECount = getCouldNotCompute();
       const SCEV *MaxBECount = getCouldNotCompute();
+      const SCEV *MinBECount = getCouldNotCompute();
       if (EitherMayExit) {
         // Both conditions must be true for the loop to continue executing.
         // Choose the less conservative count.
@@ -7579,6 +7604,7 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
         else
           BECount =
               getUMinFromMismatchedTypes(EL0.ExactNotTaken, EL1.ExactNotTaken);
+        // Update max
         if (EL0.MaxNotTaken == getCouldNotCompute())
           MaxBECount = EL1.MaxNotTaken;
         else if (EL1.MaxNotTaken == getCouldNotCompute())
@@ -7586,11 +7612,20 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
         else
           MaxBECount =
               getUMinFromMismatchedTypes(EL0.MaxNotTaken, EL1.MaxNotTaken);
+        // Update min
+        if (EL0.MinNotTaken == getCouldNotCompute() ||
+            EL1.MinNotTaken == getCouldNotCompute())
+          MinBECount = getCouldNotCompute();
+        else
+          MinBECount =
+              getUMinFromMismatchedTypes(EL0.MinNotTaken, EL1.MinNotTaken);
       } else {
         // Both conditions must be true at the same time for the loop to exit.
         // For now, be conservative.
         if (EL0.MaxNotTaken == EL1.MaxNotTaken)
           MaxBECount = EL0.MaxNotTaken;
+        if (EL0.MinNotTaken == EL1.MinNotTaken)
+          MinBECount = EL0.MinNotTaken;
         if (EL0.ExactNotTaken == EL1.ExactNotTaken)
           BECount = EL0.ExactNotTaken;
       }
@@ -7603,8 +7638,11 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
       if (isa<SCEVCouldNotCompute>(MaxBECount) &&
           !isa<SCEVCouldNotCompute>(BECount))
         MaxBECount = getConstant(getUnsignedRangeMax(BECount));
+      if (isa<SCEVCouldNotCompute>(MinBECount) &&
+          !isa<SCEVCouldNotCompute>(BECount))
+        MinBECount = getConstant(getUnsignedRangeMin(BECount));
 
-      return ExitLimit(BECount, MaxBECount, false,
+      return ExitLimit(BECount, MaxBECount, MinBECount, false,
                        {&EL0.Predicates, &EL1.Predicates});
     }
     if (BO->getOpcode() == Instruction::Or) {
@@ -7623,6 +7661,7 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
         return CI->isZero() ? EL1 : EL0;
       const SCEV *BECount = getCouldNotCompute();
       const SCEV *MaxBECount = getCouldNotCompute();
+      const SCEV *MinBECount = getCouldNotCompute();
       if (EitherMayExit) {
         // Both conditions must be false for the loop to continue executing.
         // Choose the less conservative count.
@@ -7644,6 +7683,8 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
         // For now, be conservative.
         if (EL0.MaxNotTaken == EL1.MaxNotTaken)
           MaxBECount = EL0.MaxNotTaken;
+        if (EL0.MinNotTaken == EL1.MinNotTaken)
+          MinBECount = EL0.MinNotTaken;
         if (EL0.ExactNotTaken == EL1.ExactNotTaken)
           BECount = EL0.ExactNotTaken;
       }
@@ -7655,8 +7696,11 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
       if (isa<SCEVCouldNotCompute>(MaxBECount) &&
           !isa<SCEVCouldNotCompute>(BECount))
         MaxBECount = getConstant(getUnsignedRangeMax(BECount));
+      if (isa<SCEVCouldNotCompute>(MinBECount) &&
+          !isa<SCEVCouldNotCompute>(BECount))
+        MinBECount = getConstant(getUnsignedRangeMin(BECount));
 
-      return ExitLimit(BECount, MaxBECount, false,
+      return ExitLimit(BECount, MaxBECount, MinBECount, false,
                        {&EL0.Predicates, &EL1.Predicates});
     }
   }
@@ -8039,7 +8083,9 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeShiftCompareExitLimit(
     unsigned BitWidth = getTypeSizeInBits(RHS->getType());
     const SCEV *UpperBound =
         getConstant(getEffectiveSCEVType(RHS->getType()), BitWidth);
-    return ExitLimit(getCouldNotCompute(), UpperBound, false);
+    const SCEV *LowerBound =
+        getConstant(getEffectiveSCEVType(RHS->getType()), 0);
+    return ExitLimit(getCouldNotCompute(), UpperBound, LowerBound, false);
   }
 
   return getCouldNotCompute();
@@ -9077,7 +9123,7 @@ ScalarEvolution::howFarToZero(const SCEV *V, const Loop *L, bool ControlsExit,
     // should not accept a root of 2.
     if (auto S = SolveQuadraticAddRecExact(AddRec, *this)) {
       const auto *R = cast<SCEVConstant>(getConstant(S.getValue()));
-      return ExitLimit(R, R, false, Predicates);
+      return ExitLimit(R, R, R, false, Predicates);
     }
     return getCouldNotCompute();
   }
@@ -9124,6 +9170,7 @@ ScalarEvolution::howFarToZero(const SCEV *V, const Loop *L, bool ControlsExit,
   //   N = Distance (as unsigned)
   if (StepC->getValue()->isOne() || StepC->getValue()->isMinusOne()) {
     APInt MaxBECount = getUnsignedRangeMax(Distance);
+    APInt MinBECount = getUnsignedRangeMin(Distance);
 
     // When a loop like "for (int i = 0; i != n; ++i) { /* body */ }" is rotated,
     // we end up with a loop whose backedge-taken count is n - 1.  Detect this
@@ -9141,7 +9188,8 @@ ScalarEvolution::howFarToZero(const SCEV *V, const Loop *L, bool ControlsExit,
       ConstantRange CR = getUnsignedRange(DistancePlusOne);
       MaxBECount = APIntOps::umin(MaxBECount, CR.getUnsignedMax() - 1);
     }
-    return ExitLimit(Distance, getConstant(MaxBECount), false, Predicates);
+    return ExitLimit(Distance, getConstant(MaxBECount), getConstant(MinBECount),
+                     false, Predicates);
   }
 
   // If the condition controls loop exit (the loop exits only if the expression
@@ -9157,16 +9205,23 @@ ScalarEvolution::howFarToZero(const SCEV *V, const Loop *L, bool ControlsExit,
         Exact == getCouldNotCompute()
             ? Exact
             : getConstant(getUnsignedRangeMax(Exact));
-    return ExitLimit(Exact, Max, false, Predicates);
+    const SCEV *Min =
+        Exact == getCouldNotCompute()
+            ? Exact
+            : getConstant(getUnsignedRangeMin(Exact));
+    return ExitLimit(Exact, Max, Min, false, Predicates);
   }
 
   // Solve the general equation.
   const SCEV *E = SolveLinEquationWithOverflow(StepC->getAPInt(),
                                                getNegativeSCEV(Start), *this);
-  const SCEV *M = E == getCouldNotCompute()
-                      ? E
-                      : getConstant(getUnsignedRangeMax(E));
-  return ExitLimit(E, M, false, Predicates);
+  const SCEV *Max = E == getCouldNotCompute()
+                       ? E
+                       : getConstant(getUnsignedRangeMax(E));
+  const SCEV *Min = E == getCouldNotCompute()
+                       ? E
+                       : getConstant(getUnsignedRangeMax(E));
+  return ExitLimit(E, Max, Min, false, Predicates);
 }
 
 ScalarEvolution::ExitLimit
@@ -11028,10 +11083,11 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   // calculate the MaxBECount, given the start, stride and max value for the end
   // bound of the loop (RHS), and the fact that IV does not overflow (which is
   // checked above).
-  if (!isLoopInvariant(RHS, L)) {
+  if (!isLoopInvariant(RHS, L)) { // FIXMEEEEE
     const SCEV *MaxBECount = computeMaxBECountForLT(
         Start, Stride, RHS, getTypeSizeInBits(LHS->getType()), IsSigned);
-    return ExitLimit(getCouldNotCompute() /* ExactNotTaken */, MaxBECount,
+    return ExitLimit(getCouldNotCompute() /* ExactNotTaken */,
+                     MaxBECount, getCouldNotCompute() /* Min */,
                      false /*MaxOrZero*/, Predicates);
   }
   // If the backedge is taken at least once, then it will be taken
@@ -11056,25 +11112,32 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   }
 
   const SCEV *MaxBECount;
+  const SCEV *MinBECount;
   bool MaxOrZero = false;
-  if (isa<SCEVConstant>(BECount))
+  if (isa<SCEVConstant>(BECount)) {
     MaxBECount = BECount;
-  else if (isa<SCEVConstant>(BECountIfBackedgeTaken)) {
+    MinBECount = BECount;
+  } else if (isa<SCEVConstant>(BECountIfBackedgeTaken)) {
     // If we know exactly how many times the backedge will be taken if it's
     // taken at least once, then the backedge count will either be that or
     // zero.
     MaxBECount = BECountIfBackedgeTaken;
+    MinBECount = BECountIfBackedgeTaken;
     MaxOrZero = true;
-  } else {
+  } else { // FIXMEEEE add min
     MaxBECount = computeMaxBECountForLT(
         Start, Stride, RHS, getTypeSizeInBits(LHS->getType()), IsSigned);
+    MinBECount = getCouldNotCompute();
   }
 
   if (isa<SCEVCouldNotCompute>(MaxBECount) &&
       !isa<SCEVCouldNotCompute>(BECount))
     MaxBECount = getConstant(getUnsignedRangeMax(BECount));
+  if (isa<SCEVCouldNotCompute>(MinBECount) &&
+      !isa<SCEVCouldNotCompute>(BECount))
+    MinBECount = getConstant(getUnsignedRangeMin(BECount));
 
-  return ExitLimit(BECount, MaxBECount, MaxOrZero, Predicates);
+  return ExitLimit(BECount, MaxBECount, MinBECount, MaxOrZero, Predicates);
 }
 
 ScalarEvolution::ExitLimit
@@ -11123,11 +11186,17 @@ ScalarEvolution::howManyGreaterThans(const SCEV *LHS, const SCEV *RHS,
 
   const SCEV *BECount = computeBECount(getMinusSCEV(Start, End), Stride, false);
 
+  APInt MinStart = IsSigned ? getSignedRangeMin(Start)
+                            : getUnsignedRangeMin(Start);
+
   APInt MaxStart = IsSigned ? getSignedRangeMax(Start)
                             : getUnsignedRangeMax(Start);
 
   APInt MinStride = IsSigned ? getSignedRangeMin(Stride)
                              : getUnsignedRangeMin(Stride);
+
+  APInt MaxStride = IsSigned ? getSignedRangeMax(Stride)
+                             : getUnsignedRangeMax(Stride);
 
   unsigned BitWidth = getTypeSizeInBits(LHS->getType());
   APInt Limit = IsSigned ? APInt::getSignedMinValue(BitWidth) + (MinStride - 1)
@@ -11139,16 +11208,29 @@ ScalarEvolution::howManyGreaterThans(const SCEV *LHS, const SCEV *RHS,
   APInt MinEnd =
     IsSigned ? APIntOps::smax(getSignedRangeMin(RHS), Limit)
              : APIntOps::umax(getUnsignedRangeMin(RHS), Limit);
+  APInt MaxEnd =
+    IsSigned ? APIntOps::smax(getSignedRangeMax(RHS), Limit)
+             : APIntOps::umax(getUnsignedRangeMax(RHS), Limit);
 
   const SCEV *MaxBECount = isa<SCEVConstant>(BECount)
                                ? BECount
                                : computeBECount(getConstant(MaxStart - MinEnd),
                                                 getConstant(MinStride), false);
 
+  bool MayExitEarly = IsSigned ? MinStart.slt(MaxEnd) : MinStart.ult(MaxEnd);
+  const SCEV *MinBECount = isa<SCEVConstant>(BECount)
+                               ? BECount
+                               : MayExitEarly
+                                  ? getConstant(APInt(BitWidth, 0ull))
+                                  : computeBECount(getConstant(MinStart - MaxEnd),
+                                                   getConstant(MaxStride), false);
+
   if (isa<SCEVCouldNotCompute>(MaxBECount))
     MaxBECount = BECount;
+  if (isa<SCEVCouldNotCompute>(MinBECount))
+    MinBECount = BECount;
 
-  return ExitLimit(BECount, MaxBECount, false, Predicates);
+  return ExitLimit(BECount, MaxBECount, MinBECount, false, Predicates);
 }
 
 const SCEV *SCEVAddRecExpr::getNumIterationsInRange(const ConstantRange &Range,
@@ -11872,6 +11954,15 @@ static void PrintLoopInfo(raw_ostream &OS, ScalarEvolution *SE,
       OS << ", actual taken count either this or zero.";
   } else {
     OS << "Unpredictable max backedge-taken count. ";
+  }
+
+  OS << "\nLoop ";
+  L->getHeader()->printAsOperand(OS, /*PrintType=*/false);
+  OS << ": ";
+  if (!isa<SCEVCouldNotCompute>(SE->getConstantMinBackedgeTakenCount(L))) {
+    OS << "min backedge-taken count is " << *SE->getConstantMinBackedgeTakenCount(L);
+  } else {
+    OS << "Unpredictable min backedge-taken count. ";
   }
 
   OS << "\n"

@@ -20,6 +20,7 @@
 ; CHECK-NEXT: Determining loop execution counts for: @f0
 ; CHECK-NEXT: Loop %b1: backedge-taken count is 255
 ; CHECK-NEXT: Loop %b1: max backedge-taken count is 255
+; CHECK-NEXT: Loop %b1: min backedge-taken count is 255
 ; CHECK-NEXT: Loop %b1: Predicated backedge-taken count is 255
 ; CHECK-NEXT:  Predicates:
 ; CHECK-EMPTY:

@@ -24,6 +24,7 @@ define i32 @wc_max() {
 ; CHECK-NEXT:  Determining loop execution counts for: @wc_max
 ; CHECK-NEXT:  Loop %loop: Unpredictable backedge-taken count.
 ; CHECK-NEXT:  Loop %loop: max backedge-taken count is 1999
+; CHECK-NEXT:  Loop %loop: Unpredictable min backedge-taken count.
 ; CHECK-NEXT:  Loop %loop: Unpredictable predicated backedge-taken count.
 ;
 entry:
