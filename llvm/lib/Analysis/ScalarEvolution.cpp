@@ -12050,6 +12050,8 @@ void ScalarEvolution::print(raw_ostream &OS) const {
             OS << "<<Unknown>>";
           } else {
             OS << *ExitValue;
+	    if (ExitValue->getType()->isFloatingPointTy())
+	      OS << " S: " << SE.getSignedRange(ExitValue);
           }
 
           bool First = true;
