@@ -617,6 +617,7 @@ public:
                                       unsigned Depth = 0);
 
   const SCEV *convertTypeZE(const SCEV *V, Type *Ty,
+                            APFloat::roundingMode rm = APFloat::rmNearestTiesToEven,
                             unsigned Depth = 0);
 
   /// Return a SCEV corresponding to a conversion of the input value to the
@@ -679,7 +680,7 @@ public:
   /// Test whether entry to the loop is protected by a conditional between LHS
   /// and RHS.  This is used to help avoid max expressions in loop trip
   /// counts, and to eliminate casts.
-  bool isLoopEntryGuardedByCond(const Loop *L, ICmpInst::Predicate Pred,
+  bool isLoopEntryGuardedByCond(const Loop *L, CmpInst::Predicate Pred,
                                 const SCEV *LHS, const SCEV *RHS);
 
   /// Test whether the backedge of the loop is protected by a conditional
@@ -841,7 +842,7 @@ public:
 
   /// Determine the signed range for a particular SCEV.
   /// NOTE: This returns a copy of the reference returned by getRangeRef.
-  ConstantRange getSignedRange(const SCEV *S, const Loop *L=nullptr) {
+  ConstantRange getSignedRange(const SCEV *S, const Loop *L = nullptr) {
     return getRangeRef(S, HINT_RANGE_SIGNED, L);
   }
 
@@ -856,19 +857,19 @@ public:
   }
 
   /// Test if the given expression is known to be negative.
-  bool isKnownNegative(const SCEV *S);
+  bool isKnownNegative(const SCEV *S, const Loop *L = nullptr);
 
   /// Test if the given expression is known to be positive.
-  bool isKnownPositive(const SCEV *S);
+  bool isKnownPositive(const SCEV *S, const Loop *L = nullptr);
 
   /// Test if the given expression is known to be non-negative.
-  bool isKnownNonNegative(const SCEV *S);
+  bool isKnownNonNegative(const SCEV *S, const Loop *L = nullptr);
 
   /// Test if the given expression is known to be non-positive.
-  bool isKnownNonPositive(const SCEV *S);
+  bool isKnownNonPositive(const SCEV *S, const Loop *L = nullptr);
 
   /// Test if the given expression is known to be non-zero.
-  bool isKnownNonZero(const SCEV *S);
+  bool isKnownNonZero(const SCEV *S, const Loop *L = nullptr);
 
   /// Splits SCEV expression \p S into two SCEVs. One of them is obtained from
   /// \p S by substitution of all AddRec sub-expression related to loop \p L
@@ -1467,13 +1468,14 @@ private:
   /// Determine the range for a particular SCEV.
   /// NOTE: This returns a reference to an entry in a cache. It must be
   /// copied if its needed for longer.
-  const ConstantRange &getRangeRef(const SCEV *S, RangeSignHint Hint, const Loop *L=nullptr);
+  const ConstantRange &getRangeRef(const SCEV *S, RangeSignHint Hint,
+                                   const Loop *L = nullptr);
 
   /// Determines the range for the affine SCEVAddRecExpr {\p Start,+,\p Stop}.
   /// Helper for \c getRange.
   ConstantRange getRangeForAffineAR(const SCEV *Start, const SCEV *Stop,
                                     const SCEV *MaxBECount, unsigned BitWidth,
-                                    const Loop *L=nullptr);
+                                    const Loop *L = nullptr);
 
   /// Try to compute a range for the affine SCEVAddRecExpr {\p Start,+,\p
   /// Stop} by "factoring out" a ternary expression from the add recurrence.
@@ -1597,6 +1599,11 @@ private:
   /// to use a minimal set of SCEV predicates in order to return an exact
   /// answer.
   ExitLimit computeExitLimitFromICmp(const Loop *L, ICmpInst *ExitCond,
+                                     bool ExitIfTrue,
+                                     bool IsSubExpr,
+                                     bool AllowPredicates = false);
+
+  ExitLimit computeExitLimitFromFCmp(const Loop *L, FCmpInst *ExitCond,
                                      bool ExitIfTrue,
                                      bool IsSubExpr,
                                      bool AllowPredicates = false);
@@ -1755,7 +1762,7 @@ private:
 
   /// Test if the given expression is known to satisfy the condition described
   /// by Pred and the known constant ranges of LHS and RHS.
-  bool isKnownPredicateViaConstantRanges(ICmpInst::Predicate Pred,
+  bool isKnownPredicateViaConstantRanges(CmpInst::Predicate Pred,
                                          const SCEV *LHS, const SCEV *RHS);
 
   /// Try to prove the condition described by "LHS Pred RHS" by ruling out

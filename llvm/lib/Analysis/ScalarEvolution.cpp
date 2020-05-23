@@ -59,6 +59,7 @@
 
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
@@ -3310,6 +3311,9 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
   assert(getEffectiveSCEVType(LHS->getType()) ==
          getEffectiveSCEVType(RHS->getType()) &&
          "SCEVUDivExpr operand types don't match!");
+  if (const SCEVConstantFP *LHSC = dyn_cast<SCEVConstantFP>(LHS))
+    if (const SCEVConstantFP *RHSC = dyn_cast<SCEVConstantFP>(RHS))
+      return getConstant(LHSC->getAPFloat() / RHSC->getAPFloat());
 
   if (const SCEVConstant *RHSC = dyn_cast<SCEVConstant>(RHS)) {
     if (RHSC->getValue()->isOne())
@@ -3680,6 +3684,8 @@ const SCEV *ScalarEvolution::getMinMaxExpr(unsigned Kind,
 
   bool IsSigned = Kind == scSMaxExpr || Kind == scSMinExpr;
   bool IsMax = Kind == scSMaxExpr || Kind == scUMaxExpr;
+  bool IsFloat = Ops[0]->getType()->isFloatingPointTy();
+  assert(IsSigned || !IsFloat);
 
   // Sort by complexity, this groups all similar expression types together.
   GroupByComplexity(Ops, &LI, DT);
@@ -3758,8 +3764,12 @@ const SCEV *ScalarEvolution::getMinMaxExpr(unsigned Kind,
       IsSigned ? ICmpInst::ICMP_SGE : ICmpInst::ICMP_UGE;
   llvm::CmpInst::Predicate LEPred =
       IsSigned ? ICmpInst::ICMP_SLE : ICmpInst::ICMP_ULE;
+  GEPred = IsFloat ? (IsSigned ? CmpInst::FCMP_OGE : CmpInst::FCMP_UGE) : GEPred;
+  LEPred = IsFloat ? (IsSigned ? CmpInst::FCMP_OLE : CmpInst::FCMP_ULE) : LEPred;
+
   llvm::CmpInst::Predicate FirstPred = IsMax ? GEPred : LEPred;
   llvm::CmpInst::Predicate SecondPred = IsMax ? LEPred : GEPred;
+  // FIXMEEE ADD support for FP
   for (unsigned i = 0, e = Ops.size() - 1; i != e; ++i) {
     if (Ops[i] == Ops[i + 1] ||
         isKnownViaNonRecursiveReasoning(FirstPred, Ops[i], Ops[i + 1])) {
@@ -4168,20 +4178,31 @@ const SCEV *ScalarEvolution::getMinusSCEV(const SCEV *LHS, const SCEV *RHS,
   return getAddExpr(LHS, getNegativeSCEV(RHS, NegFlags), AddFlags, Depth);
 }
 
-const SCEV *ScalarEvolution::convertTypeZE(const SCEV *V, Type *Ty, unsigned Depth)
+const SCEV *ScalarEvolution::convertTypeZE(const SCEV *V, Type *Ty, APFloat::roundingMode rm, unsigned Depth)
 {
+  if (Ty == V->getType())
+    return V;
   if (V->getType()->isIntOrPtrTy() && Ty->isIntOrPtrTy())
     return getTruncateOrZeroExtend(V, Ty, Depth);
 
   // The only other supported conversion is int->float
-  assert(V->getType()->isIntOrPtrTy() && Ty->isFloatingPointTy());
-  if (V->getSCEVType() != scConstant)
+  if (!isa<SCEVConstant>(V) && !isa<SCEVConstantFP>(V))
     return getCouldNotCompute();
 
-  APInt Val = cast<SCEVConstant>(V)->getAPInt();
-  APFloat ValFP(Ty->getFltSemantics());
-  ValFP.convertFromAPInt(Val, false, APFloat::rmNearestTiesToEven);
-  return getConstant(ValFP);
+  if (V->getType()->isIntOrPtrTy() && Ty->isFloatingPointTy()) {
+    APInt Val = cast<SCEVConstant>(V)->getAPInt();
+    APFloat ValFP(Ty->getFltSemantics());
+    ValFP.convertFromAPInt(Val, false, APFloat::rmNearestTiesToEven);
+    return getConstant(ValFP);
+  }
+  if (V->getType()->isFloatingPointTy() && Ty->isIntOrPtrTy()) {
+    APFloat Val = cast<SCEVConstantFP>(V)->getAPFloat();
+    APSInt ValI(Ty->getScalarSizeInBits(), true);
+    bool exact;
+    Val.convertToInteger(ValI, APFloat::rmTowardPositive, &exact);
+    return getConstant(ValI);
+  }
+  llvm_unreachable("Unsupported conversion!");
 }
 
 const SCEV *ScalarEvolution::getTruncateOrZeroExtend(const SCEV *V, Type *Ty,
@@ -5770,8 +5791,10 @@ ScalarEvolution::getRangeRef(const SCEV *S,
 
   if (const SCEVSMaxExpr *SMax = dyn_cast<SCEVSMaxExpr>(S)) {
     ConstantRange X = getRangeRef(SMax->getOperand(0), SignHint, L);
-    for (unsigned i = 1, e = SMax->getNumOperands(); i != e; ++i)
-      X = X.smax(getRangeRef(SMax->getOperand(i), SignHint, L));
+    for (unsigned i = 1, e = SMax->getNumOperands(); i != e; ++i) {
+      X = X.getIsFloat() ? X.fmax(getRangeRef(SMax->getOperand(i), SignHint, L))
+                         : X.smax(getRangeRef(SMax->getOperand(i), SignHint, L));
+    }
     return setRange(SMax, SignHint,
                     ConservativeResult.intersectWith(X, RangeType));
   }
@@ -5803,8 +5826,10 @@ ScalarEvolution::getRangeRef(const SCEV *S,
   if (const SCEVUDivExpr *UDiv = dyn_cast<SCEVUDivExpr>(S)) {
     ConstantRange X = getRangeRef(UDiv->getLHS(), SignHint, L);
     ConstantRange Y = getRangeRef(UDiv->getRHS(), SignHint, L);
+    ConstantRange Res = UDiv->getType()->isFloatingPointTy() ? X.fdivide(Y)
+                                                             : X.udiv(Y);
     return setRange(UDiv, SignHint,
-                    ConservativeResult.intersectWith(X.udiv(Y), RangeType));
+                    ConservativeResult.intersectWith(Res, RangeType));
   }
 
   if (const SCEVZeroExtendExpr *ZExt = dyn_cast<SCEVZeroExtendExpr>(S)) {
@@ -7422,6 +7447,7 @@ ScalarEvolution::computeBackedgeTakenCount(const Loop *L,
     assert((AllowPredicates || EL.Predicates.empty()) &&
            "Predicated exit limit when predicates are not allowed!");
 
+//    dbgs() << "----COMPUTED EXIT LIMIT: " << *EL.ExactNotTaken << " MAX: " << *EL.MaxNotTaken << " MIN: " << *EL.MinNotTaken << " at scale: " << L << "\n";
     // 1. For each exit that can be computed, add an entry to ExitCounts.
     // CouldComputeBECount is true only if all exits can be computed.
     if (EL.ExactNotTaken == getCouldNotCompute())
@@ -7497,6 +7523,7 @@ ScalarEvolution::computeExitLimit(const Loop *L, BasicBlock *ExitingBlock,
     assert(ExitIfTrue == L->contains(BI->getSuccessor(1)) &&
            "It should have one successor in loop and one exit block!");
     // Proceed to the next level to examine the exit condition expression.
+//    dbgs() << "----COMPUTING BRANCH INSTRUCTION\n";
     return computeExitLimitFromCond(
         L, BI->getCondition(), ExitIfTrue,
         /*ControlsExit=*/IsOnlyExit, AllowPredicates);
@@ -7718,6 +7745,19 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeExitLimitFromCondImpl(
                                     /*AllowPredicates=*/true);
   }
 
+  // With an icmp, it may be feasible to compute an exact backedge-taken count.
+  // Proceed to the next level to examine the icmp.
+  if (FCmpInst *ExitCondFCmp = dyn_cast<FCmpInst>(ExitCond)) {
+    ExitLimit EL =
+        computeExitLimitFromFCmp(L, ExitCondFCmp, ExitIfTrue, ControlsExit);
+    if (EL.hasFullInfo() || !AllowPredicates)
+      return EL;
+
+    // Try again, but use SCEV predicates this time.
+    return computeExitLimitFromFCmp(L, ExitCondFCmp, ExitIfTrue, ControlsExit,
+                                    /*AllowPredicates=*/true);
+  }
+
   // Check for a constant condition. These are normally stripped out by
   // SimplifyCFG, but ScalarEvolution may be used by a pass which wishes to
   // preserve the CFG and is temporarily leaving constant conditions
@@ -7832,6 +7872,99 @@ ScalarEvolution::computeExitLimitFromICmp(const Loop *L,
 
   return computeShiftCompareExitLimit(ExitCond->getOperand(0),
                                       ExitCond->getOperand(1), L, OriginalPred);
+}
+
+ScalarEvolution::ExitLimit
+ScalarEvolution::computeExitLimitFromFCmp(const Loop *L,
+                                          FCmpInst *ExitCond,
+                                          bool ExitIfTrue,
+                                          bool ControlsExit,
+                                          bool AllowPredicates) {
+  // If the condition was exit on true, convert the condition to exit on false
+  FCmpInst::Predicate Pred;
+  if (!ExitIfTrue)
+    Pred = ExitCond->getPredicate();
+  else
+    Pred = ExitCond->getInversePredicate();
+  const FCmpInst::Predicate OriginalPred = Pred;
+
+  const SCEV *LHS = getSCEV(ExitCond->getOperand(0));
+  const SCEV *RHS = getSCEV(ExitCond->getOperand(1));
+
+  // Try to evaluate any dependencies out of the loop.
+  LHS = getSCEVAtScope(LHS, L);
+  RHS = getSCEVAtScope(RHS, L);
+
+  // At this point, we would like to compute how many iterations of the
+  // loop the predicate will return true for these inputs.
+  if (isLoopInvariant(LHS, L) && !isLoopInvariant(RHS, L)) {
+    // If there is a loop-invariant, force it into the RHS.
+    std::swap(LHS, RHS);
+    Pred = FCmpInst::getSwappedPredicate(Pred);
+  }
+
+  // TODO: Simplify Expressions here if possible
+  // We can't get rid of 'or equal' parts of the comparisons so it's not a high priority
+
+  // If we have a comparison of a chrec against a constant, try to use value
+  // ranges to answer this query.
+  if (const SCEVConstantFP *RHSC = dyn_cast<SCEVConstantFP>(RHS))
+    if (const SCEVAddRecExpr *AddRec = dyn_cast<SCEVAddRecExpr>(LHS))
+      if (AddRec->getLoop() == L) {
+        // Form the constant range.
+        ConstantRange CompRange =
+            ConstantRange::makeExactFCmpRegion(Pred, RHSC->getAPFloat());
+//        dbgs() << "EXACT RANGE: " << CompRange << "\n";
+
+        const SCEV *Ret = AddRec->getNumIterationsInRange(CompRange, *this);
+        if (auto RetC = dyn_cast<SCEVConstantFP>(Ret))
+          Ret = convertTypeZE(RetC,
+                              Type::getInt64Ty(RetC->getType()->getContext()),
+                              APFloat::rmTowardPositive);
+        if (!isa<SCEVCouldNotCompute>(Ret)) return Ret;
+      }
+
+  switch (Pred) {
+  case FCmpInst::FCMP_UNE:
+  case FCmpInst::FCMP_ONE: {                     // while (X != Y)
+    // Convert to: while (X-Y != 0)
+    ExitLimit EL = howFarToZero(getMinusSCEV(LHS, RHS), L, ControlsExit,
+                                AllowPredicates);
+    if (EL.hasAnyInfo()) return EL;
+    break;
+  }
+  case FCmpInst::FCMP_UEQ:
+  case FCmpInst::FCMP_OEQ: {                     // while (X == Y)
+    // Convert to: while (X-Y == 0)
+    ExitLimit EL = howFarToNonZero(getMinusSCEV(LHS, RHS), L);
+    if (EL.hasAnyInfo()) return EL;
+    break;
+  }
+  case FCmpInst::FCMP_OLT:
+  case FCmpInst::FCMP_ULT: {                    // while (X < Y)
+    bool IsOrdered = Pred == FCmpInst::FCMP_OLT;
+    ExitLimit EL = howManyLessThans(LHS, RHS, L, IsOrdered, ControlsExit,
+                                    AllowPredicates);
+    if (EL.hasAnyInfo()) return EL;
+    break;
+  }
+  case FCmpInst::FCMP_OGT:
+  case FCmpInst::FCMP_UGT: {                    // while (X > Y)
+    bool IsOrdered = Pred == FCmpInst::FCMP_OGT;
+    ExitLimit EL =
+        howManyGreaterThans(LHS, RHS, L, IsOrdered, ControlsExit,
+                            AllowPredicates);
+    if (EL.hasAnyInfo()) return EL;
+    break;
+  }
+  default:
+    break;
+  }
+
+  auto *ExhaustiveCount =
+      computeExitCountExhaustively(L, ExitCond, ExitIfTrue);
+//  dbgs() << "_____FROM FCMP: " << *ExitCond << " LHS: " << *LHS << " RHS: " << *RHS << "_____\n";
+  return ExhaustiveCount;
 }
 
 ScalarEvolution::ExitLimit
@@ -8535,6 +8668,7 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
 
   // If this instruction is evolved from a constant-evolving PHI, compute the
   // exit value from the loop without using SCEVs.
+//  dbgs() << "====COMPUTING: " << *V << " at scale: " << L << "\n";
   if (const SCEVUnknown *SU = dyn_cast<SCEVUnknown>(V)) {
     if (Instruction *I = dyn_cast<Instruction>(SU->getValue())) {
       if (PHINode *PN = dyn_cast<PHINode>(I)) {
@@ -8691,6 +8825,7 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
   // If this is a loop recurrence for a loop that does not contain L, then we
   // are dealing with the final value computed by the loop.
   if (const SCEVAddRecExpr *AddRec = dyn_cast<SCEVAddRecExpr>(V)) {
+//    dbgs() << "====COMPUTING ADD REC: " << *V << " at scale: " << L << "\n";
     // First, attempt to evaluate each operand.
     // Avoid performing the look-up in the common case where the specified
     // expression has no loop-variant portions.
@@ -8725,6 +8860,7 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
       // To evaluate this recurrence, we need to know how many times the AddRec
       // loop iterates.  Compute this now.
       const SCEV *BackedgeTakenCount = getBackedgeTakenCount(AddRec->getLoop());
+//      dbgs() << "====COMPUTING: " << *V << " at scale: " << L << " backedge taken: " << *BackedgeTakenCount << "\n";
       if (BackedgeTakenCount == getCouldNotCompute()) return AddRec;
 
       // Then, evaluate the AddRec.
@@ -9485,7 +9621,7 @@ bool ScalarEvolution::SimplifyICmpOperands(ICmpInst::Predicate &Pred,
   return Changed;
 }
 
-bool ScalarEvolution::isKnownNegative(const SCEV *S) {
+bool ScalarEvolution::isKnownNegative(const SCEV *S, const Loop *L) {
   if (S->getType()->isFloatingPointTy()) {
     const APFloat Max = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMaxFP();
     return Max.isNegative() && !Max.isNegZero();
@@ -9493,32 +9629,32 @@ bool ScalarEvolution::isKnownNegative(const SCEV *S) {
   return getSignedRangeMax(S).isNegative();
 }
 
-bool ScalarEvolution::isKnownPositive(const SCEV *S) {
+bool ScalarEvolution::isKnownPositive(const SCEV *S, const Loop *L) {
   if (S->getType()->isFloatingPointTy()) {
-    const APFloat Min = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMinFP();
+    const APFloat Min = getRangeRef(S, HINT_RANGE_SIGNED, L).getSignedMinFP();
     return !Min.isNegative() && !Min.isPosZero();
   }
   return getSignedRangeMin(S).isStrictlyPositive();
 }
 
-bool ScalarEvolution::isKnownNonNegative(const SCEV *S) {
+bool ScalarEvolution::isKnownNonNegative(const SCEV *S, const Loop *L) {
   if (S->getType()->isFloatingPointTy()) {
-    const APFloat Min = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMinFP();
+    const APFloat Min = getRangeRef(S, HINT_RANGE_SIGNED, L).getSignedMinFP();
     return !Min.isNegative() || Min.isNegZero();
   }
   return !getSignedRangeMin(S).isNegative();
 }
 
-bool ScalarEvolution::isKnownNonPositive(const SCEV *S) {
+bool ScalarEvolution::isKnownNonPositive(const SCEV *S, const Loop *L) {
   if (S->getType()->isFloatingPointTy()) {
-    const APFloat Max = getRangeRef(S, HINT_RANGE_SIGNED).getSignedMaxFP();
+    const APFloat Max = getRangeRef(S, HINT_RANGE_SIGNED, L).getSignedMaxFP();
     return Max.isNegative() || Max.isPosZero();
   }
   return !getSignedRangeMax(S).isStrictlyPositive();
 }
 
-bool ScalarEvolution::isKnownNonZero(const SCEV *S) {
-  return isKnownNegative(S) || isKnownPositive(S);
+bool ScalarEvolution::isKnownNonZero(const SCEV *S, const Loop *L) {
+  return isKnownNegative(S, L) || isKnownPositive(S, L);
 }
 
 std::pair<const SCEV *, const SCEV *>
@@ -9733,33 +9869,49 @@ bool ScalarEvolution::isLoopInvariantPredicate(
 }
 
 bool ScalarEvolution::isKnownPredicateViaConstantRanges(
-    ICmpInst::Predicate Pred, const SCEV *LHS, const SCEV *RHS) {
+    CmpInst::Predicate Pred, const SCEV *LHS, const SCEV *RHS) {
   if (HasSameValue(LHS, RHS))
-    return ICmpInst::isTrueWhenEqual(Pred);
+    return CmpInst::isTrueWhenEqual(Pred);
 
   // This code is split out from isKnownPredicate because it is called from
   // within isLoopEntryGuardedByCond.
-
+# if 0
+  dbgs() << "PREDICATE: " << CmpInst::getPredicateName(Pred) << " " << *LHS << " " << *RHS << "\n";
+#endif
+  assert(CmpInst::isFPPredicate(Pred) == LHS->getType()->isFloatingPointTy());
   auto CheckRanges =
       [&](const ConstantRange &RangeLHS, const ConstantRange &RangeRHS) {
+    if (CmpInst::isFPPredicate(Pred))
+      return ConstantRange::makeSatisfyingFCmpRegion(Pred, RangeRHS)
+          .contains(RangeLHS);
+
     return ConstantRange::makeSatisfyingICmpRegion(Pred, RangeRHS)
         .contains(RangeLHS);
   };
 
   // The check at the top of the function catches the case where the values are
   // known to be equal.
-  if (Pred == CmpInst::ICMP_EQ)
+  switch (Pred) {
+  case CmpInst::FCMP_OEQ:
+  case CmpInst::FCMP_UEQ:
+  case CmpInst::ICMP_EQ:
     return false;
 
-  if (Pred == CmpInst::ICMP_NE)
+  case CmpInst::FCMP_ONE:
+  case CmpInst::FCMP_UNE:
+    return CheckRanges(getSignedRange(LHS), getSignedRange(RHS)) ||
+           isKnownNonZero(getMinusSCEV(LHS, RHS));
+  case CmpInst::ICMP_NE:
     return CheckRanges(getSignedRange(LHS), getSignedRange(RHS)) ||
            CheckRanges(getUnsignedRange(LHS), getUnsignedRange(RHS)) ||
            isKnownNonZero(getMinusSCEV(LHS, RHS));
 
-  if (CmpInst::isSigned(Pred))
-    return CheckRanges(getSignedRange(LHS), getSignedRange(RHS));
+  default:
+    if (CmpInst::isSigned(Pred) || CmpInst::isFPPredicate(Pred))
+      return CheckRanges(getSignedRange(LHS), getSignedRange(RHS));
 
-  return CheckRanges(getUnsignedRange(LHS), getUnsignedRange(RHS));
+    return CheckRanges(getUnsignedRange(LHS), getUnsignedRange(RHS));
+  }
 }
 
 bool ScalarEvolution::isKnownPredicateViaNoOverflow(ICmpInst::Predicate Pred,
@@ -9973,7 +10125,7 @@ ScalarEvolution::isLoopBackedgeGuardedByCond(const Loop *L,
 
 bool
 ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
-                                          ICmpInst::Predicate Pred,
+                                          CmpInst::Predicate Pred,
                                           const SCEV *LHS, const SCEV *RHS) {
   // Interpret a null as meaning no loop, where there is obviously no guard
   // (interprocedural conditions notwithstanding).
@@ -9997,7 +10149,9 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
   // non-strict comparison is known from ranges and non-equality is known from
   // dominating predicates. If we are proving strict comparison, we always try
   // to prove non-equality and non-strict comparison separately.
-  auto NonStrictPredicate = ICmpInst::getNonStrictPredicate(Pred);
+  auto NonStrictPredicate = CmpInst::getNonStrictPredicate(Pred);
+  auto NEPredicate = CmpInst::isIntPredicate(Pred) ? CmpInst::ICMP_NE :
+                     CmpInst::isOrdered(Pred) ? CmpInst::FCMP_ONE : CmpInst::FCMP_UNE;
   const bool ProvingStrictComparison = (Pred != NonStrictPredicate);
   bool ProvedNonStrictComparison = false;
   bool ProvedNonEquality = false;
@@ -10005,8 +10159,9 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
   if (ProvingStrictComparison) {
     ProvedNonStrictComparison =
         isKnownViaNonRecursiveReasoning(NonStrictPredicate, LHS, RHS);
+
     ProvedNonEquality =
-        isKnownViaNonRecursiveReasoning(ICmpInst::ICMP_NE, LHS, RHS);
+        isKnownViaNonRecursiveReasoning(NEPredicate, LHS, RHS);
     if (ProvedNonStrictComparison && ProvedNonEquality)
       return true;
   }
@@ -10021,7 +10176,7 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
             isImpliedViaGuard(Block, NonStrictPredicate, LHS, RHS);
       if (!ProvedNonEquality)
         ProvedNonEquality =
-            isImpliedViaGuard(Block, ICmpInst::ICMP_NE, LHS, RHS);
+            isImpliedViaGuard(Block, NEPredicate, LHS, RHS);
       if (ProvedNonStrictComparison && ProvedNonEquality)
         return true;
     }
@@ -10038,7 +10193,7 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
             isImpliedCond(NonStrictPredicate, LHS, RHS, Condition, Inverse);
       if (!ProvedNonEquality)
         ProvedNonEquality =
-            isImpliedCond(ICmpInst::ICMP_NE, LHS, RHS, Condition, Inverse);
+            isImpliedCond(NEPredicate, LHS, RHS, Condition, Inverse);
       if (ProvedNonStrictComparison && ProvedNonEquality)
         return true;
     }
@@ -10894,7 +11049,8 @@ bool ScalarEvolution::doesIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
                                          bool IsSigned, bool NoWrap) {
   assert(isKnownPositive(Stride) && "Positive stride expected!");
 
-  if (NoWrap) return false;
+  // Floating point never overflows
+  if (NoWrap || Stride->getType()->isFloatingPointTy()) return false;
 
   unsigned BitWidth = getTypeSizeInBits(RHS->getType());
   const SCEV *One = getOne(Stride->getType());
@@ -10918,7 +11074,7 @@ bool ScalarEvolution::doesIVOverflowOnLT(const SCEV *RHS, const SCEV *Stride,
 
 bool ScalarEvolution::doesIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
                                          bool IsSigned, bool NoWrap) {
-  if (NoWrap) return false;
+  if (NoWrap || Stride->getType()->isFloatingPointTy()) return false;
 
   unsigned BitWidth = getTypeSizeInBits(RHS->getType());
   const SCEV *One = getOne(Stride->getType());
@@ -10942,9 +11098,13 @@ bool ScalarEvolution::doesIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
 
 const SCEV *ScalarEvolution::computeBECount(const SCEV *Delta, const SCEV *Step,
                                             bool Equality) {
-  const SCEV *One = getOne(Step->getType());
-  Delta = Equality ? getAddExpr(Delta, Step)
-                   : getAddExpr(Delta, getMinusSCEV(Step, One));
+  // Don't mix floats and ints
+  assert(Delta->getType()->isFloatingPointTy() == Step->getType()->isFloatingPointTy());
+  if (Delta->getType()->isIntOrPtrTy()) {
+    const SCEV *One = getOne(Step->getType());
+    Delta = Equality ? getAddExpr(Delta, Step)
+                     : getAddExpr(Delta, getMinusSCEV(Step, One));
+  } // FIXMEE fptypes should really use fp div
   return getUDivExpr(Delta, Step);
 }
 
@@ -10959,6 +11119,20 @@ const SCEV *ScalarEvolution::computeMaxBECountForLT(const SCEV *Start,
   // Calculate the maximum backedge count based on the range of values
   // permitted by Start, End, and Stride.
   const SCEV *MaxBECount;
+  if (Start->getType()->isFloatingPointTy()) {
+    APFloat MinStart = getRangeRef(Start, HINT_RANGE_SIGNED).getSignedMinFP();
+    APFloat StrideForMaxBECount = getRangeRef(Stride, HINT_RANGE_SIGNED).getSignedMinFP();
+
+    APFloat MaxEnd = getRangeRef(End, HINT_RANGE_SIGNED).getSignedMaxFP();
+#if 0
+    dbgs() << "^^^^^^MAXLT COUT start: " << *Start << " (" << MinStart
+           << ") Stride: " << *Stride << " (" << StrideForMaxBECount
+           << ") end: " << *End << " (" << MaxEnd << ")^^^^^\n";
+#endif
+    return computeBECount(getConstant(MaxEnd - MinStart) /* Delta */,
+                          getConstant(StrideForMaxBECount) /* Step */,
+                          false /* Equality */);
+  }
   APInt MinStart =
       IsSigned ? getSignedRangeMin(Start) : getUnsignedRangeMin(Start);
 
@@ -11017,7 +11191,10 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
 
   const SCEV *Stride = IV->getStepRecurrence(*this);
 
-  bool PositiveStride = isKnownPositive(Stride);
+  bool PositiveStride = isKnownPositive(Stride, L);
+#if 0
+  dbgs() << "*****STRIDE: " << *Stride << (PositiveStride ? " POS" : " NON_POS") << "******\n";
+#endif
 
   // Avoid negative or zero stride values.
   if (!PositiveStride) {
@@ -11074,8 +11251,12 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
     // undefined behaviors like the case of C language.
     return getCouldNotCompute();
 
-  ICmpInst::Predicate Cond = IsSigned ? ICmpInst::ICMP_SLT
-                                      : ICmpInst::ICMP_ULT;
+  ICmpInst::Predicate ICond = IsSigned ? ICmpInst::ICMP_SLT
+                                       : ICmpInst::ICMP_ULT;
+  // IsSigned means IsOrdered for float
+  FCmpInst::Predicate FCond = IsSigned ? FCmpInst::FCMP_OLT
+                                       : FCmpInst::FCMP_ULT;
+  ICmpInst::Predicate Cond = LHS->getType()->isFloatingPointTy() ? FCond : ICond;
   const SCEV *Start = IV->getStart();
   const SCEV *End = RHS;
   // When the RHS is not invariant, we do not know the end bound of the loop and
@@ -11083,9 +11264,13 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   // calculate the MaxBECount, given the start, stride and max value for the end
   // bound of the loop (RHS), and the fact that IV does not overflow (which is
   // checked above).
-  if (!isLoopInvariant(RHS, L)) { // FIXMEEEEE
+  if (!isLoopInvariant(RHS, L)) { // FIXMEEEEE add min computation
     const SCEV *MaxBECount = computeMaxBECountForLT(
         Start, Stride, RHS, getTypeSizeInBits(LHS->getType()), IsSigned);
+    if (auto MaxC = dyn_cast<SCEVConstantFP>(MaxBECount))
+      MaxBECount = convertTypeZE(MaxC,
+                                 Type::getInt64Ty(MaxC->getType()->getContext()),
+                                 APFloat::rmTowardPositive);
     return ExitLimit(getCouldNotCompute() /* ExactNotTaken */,
                      MaxBECount, getCouldNotCompute() /* Min */,
                      false /*MaxOrZero*/, Predicates);
@@ -11103,18 +11288,22 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   // as if the backedge is taken at least once max(End,Start) is End and so the
   // result is as above, and if not max(End,Start) is Start so we get a backedge
   // count of zero.
+#if 0
+  dbgs() << "*****COUNT IF TAKEN: " << *BECountIfBackedgeTaken << " Range: " << getRangeRef(BECountIfBackedgeTaken, HINT_RANGE_SIGNED, L) << "\n";
+#endif
   const SCEV *BECount;
-  if (isLoopEntryGuardedByCond(L, Cond, getMinusSCEV(Start, Stride), RHS))
+  if (isLoopEntryGuardedByCond(L, Cond, getMinusSCEV(Start, Stride), RHS)) {
     BECount = BECountIfBackedgeTaken;
-  else {
-    End = IsSigned ? getSMaxExpr(RHS, Start) : getUMaxExpr(RHS, Start);
+  } else {
+    End = IsSigned || RHS->getType()->isFloatingPointTy()
+          ? getSMaxExpr(RHS, Start) : getUMaxExpr(RHS, Start);
     BECount = computeBECount(getMinusSCEV(End, Start), Stride, false);
   }
 
   const SCEV *MaxBECount;
   const SCEV *MinBECount;
   bool MaxOrZero = false;
-  if (isa<SCEVConstant>(BECount)) {
+  if (isa<SCEVConstant>(BECount) || isa<SCEVConstantFP>(BECount)) {
     MaxBECount = BECount;
     MinBECount = BECount;
   } else if (isa<SCEVConstant>(BECountIfBackedgeTaken)) {
@@ -11122,7 +11311,7 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
     // taken at least once, then the backedge count will either be that or
     // zero.
     MaxBECount = BECountIfBackedgeTaken;
-    MinBECount = BECountIfBackedgeTaken;
+    MinBECount = getConstant(MaxBECount->getType(), 0);
     MaxOrZero = true;
   } else { // FIXMEEEE add min
     MaxBECount = computeMaxBECountForLT(
@@ -11132,10 +11321,35 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
 
   if (isa<SCEVCouldNotCompute>(MaxBECount) &&
       !isa<SCEVCouldNotCompute>(BECount))
-    MaxBECount = getConstant(getUnsignedRangeMax(BECount));
+    MaxBECount = BECount->getType()->isFloatingPointTy()
+               ? getConstant(getRangeRef(BECount, HINT_RANGE_SIGNED).getSignedMaxFP())
+               : getConstant(getUnsignedRangeMax(BECount));
   if (isa<SCEVCouldNotCompute>(MinBECount) &&
       !isa<SCEVCouldNotCompute>(BECount))
-    MinBECount = getConstant(getUnsignedRangeMin(BECount));
+    MinBECount = BECount->getType()->isFloatingPointTy()
+               ? getConstant(getRangeRef(BECount, HINT_RANGE_SIGNED).getSignedMinFP())
+               : getConstant(getUnsignedRangeMin(BECount));
+
+#if 0
+  dbgs() << "*****EXITLIMIT: "
+         << "Count: " << *BECount << " Range: " << getRangeRef(BECount, HINT_RANGE_SIGNED, L)
+         << " MinCount: " << *MinBECount << " Range: " << getRangeRef(MinBECount, HINT_RANGE_SIGNED, L)
+         << " MaxCount: " << *MaxBECount << " Range: " << getRangeRef(MaxBECount, HINT_RANGE_SIGNED, L)
+         << "****\n";
+#endif
+  // Convert to int counts
+  if (const SCEVConstantFP *MaxC = dyn_cast<SCEVConstantFP>(MaxBECount))
+    MaxBECount = convertTypeZE(MaxC,
+                               Type::getInt64Ty(MaxC->getType()->getContext()),
+                               APFloat::rmTowardPositive);
+  if (const SCEVConstantFP *MinC = dyn_cast<SCEVConstantFP>(MinBECount))
+    MinBECount = convertTypeZE(MinC,
+                               Type::getInt64Ty(MinC->getType()->getContext()),
+                               APFloat::rmTowardPositive);
+  if (const SCEVConstantFP *CountC = dyn_cast<SCEVConstantFP>(BECount))
+    BECount = convertTypeZE(CountC,
+                            Type::getInt64Ty(CountC->getType()->getContext()),
+                            APFloat::rmTowardPositive);
 
   return ExitLimit(BECount, MaxBECount, MinBECount, MaxOrZero, Predicates);
 }
@@ -11176,14 +11390,37 @@ ScalarEvolution::howManyGreaterThans(const SCEV *LHS, const SCEV *RHS,
   if (!Stride->isOne() && doesIVOverflowOnGT(RHS, Stride, IsSigned, NoWrap))
     return getCouldNotCompute();
 
-  ICmpInst::Predicate Cond = IsSigned ? ICmpInst::ICMP_SGT
+  ICmpInst::Predicate ICond = IsSigned ? ICmpInst::ICMP_SGT
                                       : ICmpInst::ICMP_UGT;
+  // IsSigned means IsOrdered for float
+  FCmpInst::Predicate FCond = IsSigned ? FCmpInst::FCMP_OGT
+                                       : FCmpInst::FCMP_UGT;
+  ICmpInst::Predicate Cond = LHS->getType()->isFloatingPointTy() ? FCond : ICond;
 
   const SCEV *Start = IV->getStart();
   const SCEV *End = RHS;
   if (!isLoopEntryGuardedByCond(L, Cond, getAddExpr(Start, Stride), RHS))
     End = IsSigned ? getSMinExpr(RHS, Start) : getUMinExpr(RHS, Start);
 
+  if (Start->getType()->isFloatingPointTy()) {
+    APFloat MaxStart = getRangeRef(Start, HINT_RANGE_SIGNED).getSignedMaxFP();
+    APFloat StrideForMaxBECount = getRangeRef(Stride, HINT_RANGE_SIGNED).getSignedMinFP();
+
+    APFloat MinEnd = getRangeRef(End, HINT_RANGE_SIGNED).getSignedMinFP();
+#if 0
+    dbgs() << "^^^^^^MAXLT COUT start: " << *Start << " (" << MinStart
+           << ") Stride: " << *Stride << " (" << StrideForMaxBECount
+           << ") end: " << *End << " (" << MaxEnd << ")^^^^^\n";
+#endif
+    auto Ret =  computeBECount(getConstant(MaxStart - MinEnd) /* Delta */,
+                               getConstant(StrideForMaxBECount) /* Step */,
+                               false /* Equality */);
+    if (auto RetC = dyn_cast<SCEVConstantFP>(Ret))
+      Ret = convertTypeZE(RetC,
+                          Type::getInt64Ty(RetC->getType()->getContext()),
+                          APFloat::rmTowardPositive);
+    return Ret;
+  }
   const SCEV *BECount = computeBECount(getMinusSCEV(Start, End), Stride, false);
 
   APInt MinStart = IsSigned ? getSignedRangeMin(Start)
@@ -11252,19 +11489,46 @@ const SCEV *SCEVAddRecExpr::getNumIterationsInRange(const ConstantRange &Range,
       return SE.getCouldNotCompute();
     }
 
+//  dbgs() << "NUM ITER IN RANGE: " << *this << " in  " << Range << "\n";
+  if (const SCEVConstantFP *SC = dyn_cast<SCEVConstantFP>(getStart()))
+    if (!SC->getValue()->isZero()) {
+      SmallVector<const SCEV *, 4> Operands(op_begin(), op_end());
+      Operands[0] = SE.getZero(SC->getType());
+      const SCEV *Shifted = SE.getAddRecExpr(Operands, getLoop(),
+                                             getNoWrapFlags(FlagNW));
+      if (const auto *ShiftedAddRec = dyn_cast<SCEVAddRecExpr>(Shifted))
+        return ShiftedAddRec->getNumIterationsInRange(
+            Range.fsub(SC->getAPFloat()), SE);
+      // This is strange and shouldn't happen.
+      return SE.getCouldNotCompute();
+    }
+
   // The only time we can solve this is when we have all constant indices.
   // Otherwise, we cannot determine the overflow conditions.
-  if (any_of(operands(), [](const SCEV *Op) { return !isa<SCEVConstant>(Op); }))
+  if (getType()->isIntOrPtrTy() && any_of(operands(), [](const SCEV *Op) { return !isa<SCEVConstant>(Op); }))
     return SE.getCouldNotCompute();
+
+  if (getType()->isFloatingPointTy() && any_of(operands(), [](const SCEV *Op) { return !isa<SCEVConstantFP>(Op); }))
+    return SE.getCouldNotCompute();
+
 
   // Okay at this point we know that all elements of the chrec are constants and
   // that the start element is zero.
 
   // First check to see if the range contains zero.  If not, the first
   // iteration exits.
-  unsigned BitWidth = SE.getTypeSizeInBits(getType());
-  if (!Range.contains(APInt(BitWidth, 0)))
-    return SE.getZero(getType());
+  if (getType()->isFloatingPointTy()) {
+    if (!Range.contains(APFloat::getZero(getType()->getFltSemantics())))
+      return SE.getZero(getType());
+  } else {
+    unsigned BitWidth = SE.getTypeSizeInBits(getType());
+    if (!Range.contains(APInt(BitWidth, 0)))
+      return SE.getZero(getType());
+  }
+
+  // Let's not go further now
+  if (getType()->isFloatingPointTy())
+    return SE.getCouldNotCompute();
 
   if (isAffine()) {
     // If this is an affine expression then we have this situation:
