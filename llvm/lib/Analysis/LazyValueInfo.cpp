@@ -1309,7 +1309,7 @@ static ValueLatticeElement getValueFromFCmpCondition(Value *Val, FCmpInst *FCI,
   case FCmpInst::FCMP_UGT:
   case FCmpInst::FCMP_UGE:
     Lower = ConstVal;
-    if (FCmpInst::isFalseWhenEqual(Predicate))
+    if (Predicate == FCmpInst::FCMP_OGT || Predicate == FCmpInst::FCMP_UGT)
       Lower.next(false); // next up
     Upper = APFloat::getInf(ConstVal.getSemantics()); // Pos Infinity
     break;
@@ -1319,7 +1319,7 @@ static ValueLatticeElement getValueFromFCmpCondition(Value *Val, FCmpInst *FCI,
   case FCmpInst::FCMP_ULE:
     Lower = APFloat::getInf(ConstVal.getSemantics(), true); // Neg Infinity
     Upper = ConstVal;
-    if (FCI->isFalseWhenEqual())
+    if (Predicate == FCmpInst::FCMP_OLT || Predicate == FCmpInst::FCMP_ULT)
       Upper.next(true); // next down
     break;
   case FCmpInst::FCMP_ONE:
