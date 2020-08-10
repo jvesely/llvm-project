@@ -9869,7 +9869,8 @@ bool ScalarEvolution::isLoopInvariantPredicate(
 }
 
 bool ScalarEvolution::isKnownPredicateViaConstantRanges(
-    CmpInst::Predicate Pred, const SCEV *LHS, const SCEV *RHS) {
+    CmpInst::Predicate Pred, const SCEV *LHS, const SCEV *RHS,
+    const Loop *L) {
   if (HasSameValue(LHS, RHS))
     return CmpInst::isTrueWhenEqual(Pred);
 
@@ -9899,7 +9900,7 @@ bool ScalarEvolution::isKnownPredicateViaConstantRanges(
 
   case CmpInst::FCMP_ONE:
   case CmpInst::FCMP_UNE:
-    return CheckRanges(getSignedRange(LHS), getSignedRange(RHS)) ||
+    return CheckRanges(getSignedRange(LHS, L), getSignedRange(RHS, L)) ||
            isKnownNonZero(getMinusSCEV(LHS, RHS));
   case CmpInst::ICMP_NE:
     return CheckRanges(getSignedRange(LHS), getSignedRange(RHS)) ||
@@ -9908,7 +9909,7 @@ bool ScalarEvolution::isKnownPredicateViaConstantRanges(
 
   default:
     if (CmpInst::isSigned(Pred) || CmpInst::isFPPredicate(Pred))
-      return CheckRanges(getSignedRange(LHS), getSignedRange(RHS));
+      return CheckRanges(getSignedRange(LHS, L), getSignedRange(RHS, L));
 
     return CheckRanges(getUnsignedRange(LHS), getUnsignedRange(RHS));
   }
@@ -10141,7 +10142,7 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
   assert(isAvailableAtLoopEntry(RHS, L) &&
          "RHS is not available at Loop Entry");
 
-  if (isKnownViaNonRecursiveReasoning(Pred, LHS, RHS))
+  if (isKnownViaNonRecursiveReasoning(Pred, LHS, RHS, L))
     return true;
 
   // If we cannot prove strict comparison (e.g. a > b), maybe we can prove
@@ -10957,9 +10958,10 @@ static bool isKnownPredicateExtendIdiom(ICmpInst::Predicate Pred,
 
 bool
 ScalarEvolution::isKnownViaNonRecursiveReasoning(ICmpInst::Predicate Pred,
-                                           const SCEV *LHS, const SCEV *RHS) {
+                                           const SCEV *LHS, const SCEV *RHS,
+					   const Loop *L) {
   return isKnownPredicateExtendIdiom(Pred, LHS, RHS) ||
-         isKnownPredicateViaConstantRanges(Pred, LHS, RHS) ||
+         isKnownPredicateViaConstantRanges(Pred, LHS, RHS, L) ||
          IsKnownPredicateViaMinOrMax(*this, Pred, LHS, RHS) ||
          IsKnownPredicateViaAddRecStart(*this, Pred, LHS, RHS) ||
          isKnownPredicateViaNoOverflow(Pred, LHS, RHS);
@@ -11099,7 +11101,8 @@ bool ScalarEvolution::doesIVOverflowOnGT(const SCEV *RHS, const SCEV *Stride,
 const SCEV *ScalarEvolution::computeBECount(const SCEV *Delta, const SCEV *Step,
                                             bool Equality) {
   // Don't mix floats and ints
-  assert(Delta->getType()->isFloatingPointTy() == Step->getType()->isFloatingPointTy());
+  assert(Delta->getType()->isFloatingPointTy() ==
+	 Step->getType()->isFloatingPointTy());
   if (Delta->getType()->isIntOrPtrTy()) {
     const SCEV *One = getOne(Step->getType());
     Delta = Equality ? getAddExpr(Delta, Step)
@@ -11322,12 +11325,12 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
   if (isa<SCEVCouldNotCompute>(MaxBECount) &&
       !isa<SCEVCouldNotCompute>(BECount))
     MaxBECount = BECount->getType()->isFloatingPointTy()
-               ? getConstant(getRangeRef(BECount, HINT_RANGE_SIGNED).getSignedMaxFP())
+               ? getConstant(getRangeRef(BECount, HINT_RANGE_SIGNED, L).getSignedMaxFP())
                : getConstant(getUnsignedRangeMax(BECount));
   if (isa<SCEVCouldNotCompute>(MinBECount) &&
       !isa<SCEVCouldNotCompute>(BECount))
     MinBECount = BECount->getType()->isFloatingPointTy()
-               ? getConstant(getRangeRef(BECount, HINT_RANGE_SIGNED).getSignedMinFP())
+               ? getConstant(getRangeRef(BECount, HINT_RANGE_SIGNED, L).getSignedMinFP())
                : getConstant(getUnsignedRangeMin(BECount));
 
 #if 0

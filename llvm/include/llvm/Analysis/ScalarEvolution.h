@@ -1709,7 +1709,7 @@ private:
   /// Test whether the condition described by Pred, LHS, and RHS is true.
   /// Use only simple non-recursive types of checks, such as range analysis etc.
   bool isKnownViaNonRecursiveReasoning(ICmpInst::Predicate Pred,
-                                       const SCEV *LHS, const SCEV *RHS);
+                                       const SCEV *LHS, const SCEV *RHS, const Loop *L = nullptr);
 
   /// Test whether the condition described by Pred, LHS, and RHS is true
   /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
@@ -1763,7 +1763,7 @@ private:
   /// Test if the given expression is known to satisfy the condition described
   /// by Pred and the known constant ranges of LHS and RHS.
   bool isKnownPredicateViaConstantRanges(CmpInst::Predicate Pred,
-                                         const SCEV *LHS, const SCEV *RHS);
+                                         const SCEV *LHS, const SCEV *RHS, const Loop *L = nullptr);
 
   /// Try to prove the condition described by "LHS Pred RHS" by ruling out
   /// integer overflow.
