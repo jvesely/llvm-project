@@ -12280,6 +12280,8 @@ void ScalarEvolution::print(raw_ostream &OS) const {
     OS << "\n";
     for (Instruction &I : instructions(F))
       if (isSCEVable(I.getType()) && !isa<CmpInst>(I)) {
+        const Loop *L = LI.getLoopFor(I.getParent());
+
         OS << I << '\n';
         OS << "  -->  ";
         const SCEV *SV = SE.getSCEV(&I);
@@ -12290,10 +12292,8 @@ void ScalarEvolution::print(raw_ostream &OS) const {
             SE.getUnsignedRange(SV).print(OS);
           }
           OS << " S: ";
-          SE.getSignedRange(SV).print(OS);
+          SE.getSignedRange(SV, L).print(OS);
         }
-
-        const Loop *L = LI.getLoopFor(I.getParent());
 
         const SCEV *AtUse = SE.getSCEVAtScope(SV, L);
         if (AtUse != SV) {
@@ -12315,7 +12315,7 @@ void ScalarEvolution::print(raw_ostream &OS) const {
           } else {
             OS << *ExitValue;
 	    if (ExitValue->getType()->isFloatingPointTy())
-	      OS << " S: " << SE.getSignedRange(ExitValue);
+	      OS << " S: " << SE.getSignedRange(ExitValue, L);
           }
 
           bool First = true;
