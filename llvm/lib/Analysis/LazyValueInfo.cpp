@@ -1176,6 +1176,16 @@ bool LazyValueInfoImpl::solveBlockValueIntrinsic(ValueLatticeElement &BBLV,
     BBLV = ValueLatticeElement::getRange(Range.exp());
     return true;
   }
+  case Intrinsic::fabs: {
+    Optional<ConstantRange> Res = getRangeForOperand(0, II, BB);
+    if (!Res.hasValue())
+      // More work to do before applying this transfer rule.
+      return false;
+
+    ConstantRange Range = Res.getValue();
+    BBLV = ValueLatticeElement::getRange(Range.fabs());
+    return true;
+  }
   }
 
   LLVM_DEBUG(dbgs() << " compute BB '" << BB->getName()
