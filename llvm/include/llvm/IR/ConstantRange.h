@@ -583,6 +583,9 @@ public:
   /// Perform an exponential on floating point range
   ConstantRange exp() const;
 
+  /// Calculate absolute value of a floating point range
+  ConstantRange fabs() const;
+
   /// Return a new range that is the logical not of the current set.
   ConstantRange inverse() const;
 

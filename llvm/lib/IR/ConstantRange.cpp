@@ -2158,6 +2158,28 @@ ConstantRange ConstantRange::exp() const {
                        llvm::exp(UpperFP, APFloat::rmTowardPositive), canBeNaN);
 }
 
+ConstantRange ConstantRange::fabs() const {
+  assert(isFloat);
+  if (isEmptySet())
+    return getEmpty();
+
+  if (!isUpperWrapped()) {
+    if (UpperFP.isNegative())
+      return ConstantRange(::llvm::abs(UpperFP), ::llvm::abs(LowerFP), canBeNaN);
+
+    APFloat NewLower = ::llvm::maxnum(APFloat::getZero(LowerFP.getSemantics()),
+		                      LowerFP);
+    APFloat NewUpper = ::llvm::maxnum(::llvm::abs(LowerFP), UpperFP);
+    return ConstantRange(NewLower, NewUpper, canBeNaN);
+  }
+  if (UpperFP.isNegative() || !LowerFP.isNegative())
+     return ConstantRange(APFloat::getZero(LowerFP.getSemantics()),
+                          APFloat::getInf(LowerFP.getSemantics()), canBeNaN);
+
+  return ConstantRange(::llvm::minnum(::llvm::abs(LowerFP), ::llvm::abs(UpperFP)),
+                       APFloat::getInf(LowerFP.getSemantics()), canBeNaN);
+}
+
 ConstantRange ConstantRange::inverse() const {
   if (isFullSet())
     return getEmpty();
