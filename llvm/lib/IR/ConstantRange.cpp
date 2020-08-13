@@ -699,7 +699,19 @@ bool ConstantRange::contains(const ConstantRange &Other) const {
     return Other.getUpper().ule(Upper) || Lower.ule(Other.getLower());
   }
 
-  assert(!isFloat);
+  // Both ranges are upper wrapped
+  if (isFloat) {
+    auto Lo = LowerFP.compare(Other.LowerFP);
+    auto Hi = UpperFP.compare(Other.UpperFP);
+    return (Lo == APFloat::cmpGreaterThan ||
+            LowerFP.bitwiseIsEqual(Other.LowerFP) ||
+            (LowerFP.isNegZero() && Other.LowerFP.isPosZero())) &&
+           (Hi == APFloat::cmpLessThan ||
+            UpperFP.bitwiseIsEqual(Other.UpperFP) ||
+            (UpperFP.isPosZero() && Other.UpperFP.isNegZero())) &&
+           (canBeNaN || !Other.canBeNaN);
+  }
+
   return Other.getUpper().ule(Upper) && Lower.ule(Other.getLower());
 }
 
