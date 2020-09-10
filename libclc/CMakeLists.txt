@@ -24,8 +24,6 @@ set( LIBCLC_TARGETS_ALL
   nvptx64--
   nvptx--nvidiacl
   nvptx64--nvidiacl
-  spirv-mesa3d-
-  spirv64-mesa3d-
 )
 
 set( LIBCLC_MIN_LLVM "3.9.0" )
@@ -51,6 +49,11 @@ endif()
 # mesa3d environment is only available since LLVM 4.0
 if( ${LLVM_VERSION} VERSION_GREATER "3.9.0" )
 	set( LIBCLC_TARGETS_ALL ${LIBCLC_TARGETS_ALL} amdgcn-mesa-mesa3d )
+endif()
+
+# SPIR-V toosl are only available for llvm-7+
+if( ${LLVM_VERSION} VERSION_GREATER_EQUAL "7.0.0" )
+	set( LIBCLC_TARGETS_ALL ${LIBCLC_TARGETS_ALL} spirv-mesa3d- spirv64-mesa3d- )
 endif()
 
 if( LIBCLC_TARGETS_TO_BUILD STREQUAL "all" )
